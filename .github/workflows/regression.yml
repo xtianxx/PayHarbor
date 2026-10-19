@@ -8,26 +8,128 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Required conclusion: native Trust Wallet Core build and the full Go suite on
+  # a dedicated PostgreSQL, executed entirely inside the baseline container
+  # stack (Dockerfile `gotest` stage + deploy/compose/baseline + scripts/baseline).
+  # No host wallet-core install, no repository root .env, no real chain RPC.
   native-regression:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      # CI memory headroom for the wallet-core native build.
+      BUILD_JOBS: "2"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.25.4"
-          cache: true
-
       - name: Initialize submodules
         run: git submodule update --init --recursive third_party/trustwallet/wallet-core
 
-      - name: Run native Trust Wallet Core regression
-        run: GATEWAY_REGRESSION_MODE=native scripts/regression.sh
+      - name: Baseline tooling self-tests (gate + runner stubs)
+        run: |
+          set -euo pipefail
+          python3 scripts/baseline/test_verify_test_json.py
+          sh scripts/baseline/test_run_tests.sh
 
+      # Only file paths enter GITHUB_ENV; synthetic secret values are generated
+      # into 0600 files by the repository generator and are never echoed.
+      - name: Prepare run directory and synthetic environment
+        run: |
+          set -euo pipefail
+          umask 077
+          RUN="$RUNNER_TEMP/gateway-native-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$RUN/env" "$RUN/evidence"
+          scripts/generate-offline-env.sh --path "$RUN/env/gateway.env"
+          python3 scripts/baseline/make-dsn-env.py --env "$RUN/env/gateway.env" --out "$RUN/env/dsn.env"
+          {
+            echo "P0_ENV_FILE=$RUN/env/gateway.env"
+            echo "P0_DSN_FILE=$RUN/env/dsn.env"
+            echo "P0_EVIDENCE_DIR=$RUN/evidence"
+            echo "P0_TEST_IMAGE=gateway-ci:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-test"
+            # Placeholder tag for compose interpolation only: this job never
+            # starts the gateway service and never builds or deploys a runtime
+            # image, so no runtime build is implied here.
+            echo "P0_RUNTIME_IMAGE=gateway-ci:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-runtime-placeholder"
+            echo "P0_TEST_DB=gateway_test"
+            echo "PROJ=p0b-ci-native-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          } >> "$GITHUB_ENV"
+
+      # Interpolation preflight with the exact variable set the Prepare step
+      # produced: any missing required variable fails here, before the heavy
+      # native build. `config --quiet` prints nothing, so no resolved secrets
+      # can leak into the log.
+      - name: Compose interpolation preflight
+        run: |
+          set -euo pipefail
+          docker compose -p "$PROJ" --env-file "$P0_ENV_FILE" \
+            -f deploy/compose/baseline/docker-compose.yml config --quiet
+
+      - name: Build native test image from current checkout
+        run: |
+          set -euo pipefail
+          docker build --build-arg BUILD_JOBS="$BUILD_JOBS" --target gotest -t "$P0_TEST_IMAGE" .
+
+      - name: Start dedicated PostgreSQL (internal network only)
+        run: |
+          set -euo pipefail
+          docker compose -p "$PROJ" --env-file "$P0_ENV_FILE" \
+            -f deploy/compose/baseline/docker-compose.yml up -d postgres --wait
+          docker compose -p "$PROJ" --env-file "$P0_ENV_FILE" \
+            -f deploy/compose/baseline/docker-compose.yml exec -T postgres pg_isready -U postgres -d gateway_test
+
+      # continue-on-error keeps the raw exit code available to the gate; the
+      # gate below is the only step that decides pass/fail.
+      - name: Run native build/vet/test in the isolated runner
+        id: runner
+        continue-on-error: true
+        run: |
+          docker compose -p "$PROJ" --env-file "$P0_ENV_FILE" \
+            -f deploy/compose/baseline/docker-compose.yml --profile test \
+            run --rm test scripts/baseline/run-tests.sh --evidence /evidence
+
+      - name: Fail-closed gate over raw evidence
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 scripts/baseline/verify-test-json.py \
+            --json "$P0_EVIDENCE_DIR/test.jsonl" \
+            --exit-code "$P0_EVIDENCE_DIR/exit-code" \
+            --vet-exit-code "$P0_EVIDENCE_DIR/vet-exit-code" \
+            --build-exit-code "$P0_EVIDENCE_DIR/build-exit-code" \
+            --must-run scripts/baseline/must-run.txt \
+            --allow-skip scripts/baseline/allow-skip.txt \
+            --summary "$P0_EVIDENCE_DIR/summary.json"
+
+      - name: Upload baseline evidence (explicit file whitelist)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-baseline-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/gateway-native-${{ github.run_id }}-${{ github.run_attempt }}/evidence/go-version.txt
+            ${{ runner.temp }}/gateway-native-${{ github.run_id }}-${{ github.run_attempt }}/evidence/build.txt
+            ${{ runner.temp }}/gateway-native-${{ github.run_id }}-${{ github.run_attempt }}/evidence/build.stderr
+            ${{ runner.temp }}/gateway-native-${{ github.run_id }}-${{ github.run_attempt }}/evidence/vet.txt
+            ${{ runner.temp }}/gateway-native-${{ github.run_id }}-${{ github.run_attempt }}/evidence/vet.stderr
+            ${{ runner.temp }}/gateway-native-${{ github.run_id }}-${{ github.run_attempt }}/evidence/test.jsonl
+            ${{ runner.temp }}/gateway-native-${{ github.run_id }}-${{ github.run_attempt }}/evidence/test.stderr
+            ${{ runner.temp }}/gateway-native-${{ github.run_id }}-${{ github.run_attempt }}/evidence/build-exit-code
+            ${{ runner.temp }}/gateway-native-${{ github.run_id }}-${{ github.run_attempt }}/evidence/vet-exit-code
+            ${{ runner.temp }}/gateway-native-${{ github.run_id }}-${{ github.run_attempt }}/evidence/exit-code
+            ${{ runner.temp }}/gateway-native-${{ github.run_id }}-${{ github.run_attempt }}/evidence/summary.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Stop this job's dedicated services
+        if: always()
+        run: |
+          docker compose -p "$PROJ" --env-file "$P0_ENV_FILE" \
+            -f deploy/compose/baseline/docker-compose.yml down
+
+  # Supplementary only: the fallback provider can never replace the native
+  # conclusion above.
   fallback-regression:
     runs-on: ubuntu-latest
     steps:

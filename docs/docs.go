@@ -4723,7 +4723,7 @@ var SwaggerInfo = &swag.Spec{
 	Host:             "",
 	BasePath:         "/",
 	Schemes:          []string{},
-	Title:            "Gateway API",
+	Title:            "PayHarbor API",
 	Description:      "Multi-chain merchant payment gateway API.",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,

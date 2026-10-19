@@ -1,13 +1,13 @@
 <section class="grid min-h-[calc(100vh-184px)] items-center gap-8 lg:grid-cols-[minmax(0,1fr)_430px]">
   <div class="grid max-w-2xl gap-5">
-    <span class="inline-flex w-fit rounded-full bg-red-50 px-3 py-2 text-xs font-extrabold uppercase tracking-[0.08em] text-red-700">2FA Devre Dışı</span>
-    <h1 class="m-0 text-5xl font-black leading-[0.96] text-ink sm:text-6xl">İki faktörlü kimlik doğrulamayı devre dışı bırak.</h1>
-    <p class="m-0 max-w-xl text-base leading-8 text-muted">Bu işlemi onaylamak için Google Authenticator'daki mevcut 6 haneli kodu gir. 2FA devre dışı bırakıldıktan sonra bir sonraki girişte yeniden kurulum istenir.</p>
+    <span class="inline-flex w-fit rounded-full bg-red-50 px-3 py-2 text-xs font-extrabold uppercase tracking-[0.08em] text-red-700">{{ t .Locale "2FA Disabled" }}</span>
+    <h1 class="m-0 text-5xl font-black leading-[0.96] text-ink sm:text-6xl">{{ t .Locale "Disable two-factor authentication." }}</h1>
+    <p class="m-0 max-w-xl text-base leading-8 text-muted">{{ t .Locale "To confirm this action, enter the current 6-digit code from Google Authenticator. After 2FA is disabled, you will be asked to set it up again on your next sign in." }}</p>
   </div>
 
   <section class="grid gap-5 rounded-[28px] border border-line bg-white/90 p-6 shadow-soft">
     <div>
-      <h2 class="m-0 text-2xl font-black text-ink">2FA Kaldırma Onayı</h2>
+      <h2 class="m-0 text-2xl font-black text-ink">{{ t .Locale "2FA Removal Confirmation" }}</h2>
       <p class="m-0 mt-1 text-sm text-muted">{{.MerchantEmail}}</p>
     </div>
 
@@ -15,17 +15,17 @@
     {{if .Success}}<div class="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700">{{.Success}}</div>{{end}}
 
     <div class="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
-      Uyarı: 2FA devre dışı bırakıldığında hesabınız yalnızca e-posta ve şifre ile korunacaktır.
+      {{ t .Locale "Warning: once 2FA is disabled, your account will be protected only by email and password." }}
     </div>
 
     <form class="grid gap-4" method="post" action="/admin/security/2fa/disable">
       <label class="grid gap-1.5 text-sm font-bold text-muted">
-        Mevcut authenticator kodu
+        {{ t .Locale "Current authenticator code" }}
         <input class="min-h-14 rounded-2xl border border-line bg-white px-4 text-center text-3xl font-black tracking-[0.4em] text-ink outline-none focus:border-red-400 focus:ring-4 focus:ring-red-100"
                name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" autofocus required placeholder="000000">
       </label>
-      <button class="inline-flex min-h-12 items-center justify-center rounded-full bg-red-600 px-5 text-sm font-extrabold text-white hover:bg-red-700" type="submit">2FA'yı Devre Dışı Bırak</button>
-      <a class="text-center text-xs font-bold text-muted hover:text-ink" href="/admin/security">← İptal et</a>
+      <button class="inline-flex min-h-12 items-center justify-center rounded-full bg-red-600 px-5 text-sm font-extrabold text-white hover:bg-red-700" type="submit">{{ t .Locale "Disable 2FA" }}</button>
+      <a class="text-center text-xs font-bold text-muted hover:text-ink" href="/admin/security">{{ t .Locale "← Cancel" }}</a>
     </form>
   </section>
 </section>

@@ -100,7 +100,7 @@ func authorizeMetricsRequest(c fiber.Ctx) error {
 
 func buildOperationalMetrics(ctx context.Context, deps OperationalMetricsDeps, now func() time.Time) string {
 	var b strings.Builder
-	writeMetricHeader(&b, "gateway_build_info", "Gateway process info.", "gauge")
+	writeMetricHeader(&b, "gateway_build_info", "PayHarbor process info.", "gauge")
 	writeGauge(&b, "gateway_build_info", map[string]string{
 		"version": constants.PRODUCT_VERSION,
 	}, 1)

@@ -67,11 +67,59 @@ func TestProductRepoUpdatePreservesTokenAndNormalizesDonation(t *testing.T) {
 	if updated.LinkToken != token {
 		t.Fatalf("link token changed: %q -> %q", token, updated.LinkToken)
 	}
-	if updated.LinkType != models.PaymentLinkTypeDonation || updated.Amount != "0" || updated.Currency != "" || updated.Language != "tr" {
+	if updated.LinkType != models.PaymentLinkTypeDonation || updated.Amount != "0" || updated.Currency != "" || updated.Language != models.DefaultProductLanguage {
 		t.Fatalf("updated donation product = %#v", updated)
 	}
 	if updated.SuccessURL != "https://example.com/thanks" || updated.CancelURL != "" || updated.LogoURL != "" {
 		t.Fatalf("updated URLs = %#v", updated)
+	}
+
+	// An explicitly recorded language must survive updates untouched.
+	product.Name = "Support EN"
+	product.Language = "en"
+	if err := repo.Update(ctx, product); err != nil {
+		t.Fatalf("update product with explicit language: %v", err)
+	}
+	updated, err = repo.FindByID(ctx, product.ID)
+	if err != nil {
+		t.Fatalf("find explicit-language product: %v", err)
+	}
+	if updated.Language != "en" {
+		t.Fatalf("explicit language not preserved: %q", updated.Language)
+	}
+	if updated.LinkToken != token {
+		t.Fatalf("link token changed after explicit-language update: %q -> %q", token, updated.LinkToken)
+	}
+
+	// Historical rows that still hold the retired default keep it when an
+	// unrelated field is updated and Language is not cleared. Historical data is
+	// never rewritten in bulk; display-time fallback handles it.
+	legacy := &models.Product{
+		MerchantID: merchantID,
+		DomainID:   domainID,
+		Name:       "Legacy product",
+		LinkType:   models.PaymentLinkTypeFixed,
+		Amount:     "7.00",
+		Currency:   "USD",
+		Language:   "tr",
+		IsActive:   true,
+	}
+	if err := repo.Create(ctx, legacy); err != nil {
+		t.Fatalf("create legacy product: %v", err)
+	}
+	legacy.Name = "Legacy product renamed"
+	if err := repo.Update(ctx, legacy); err != nil {
+		t.Fatalf("update legacy product: %v", err)
+	}
+	reloadedLegacy, err := repo.FindByID(ctx, legacy.ID)
+	if err != nil {
+		t.Fatalf("find legacy product: %v", err)
+	}
+	if reloadedLegacy.Language != "tr" {
+		t.Fatalf("legacy language must be preserved on unrelated update: %q", reloadedLegacy.Language)
+	}
+	if reloadedLegacy.LinkToken != legacy.LinkToken || reloadedLegacy.Amount != "7.00" || reloadedLegacy.Currency != "USD" {
+		t.Fatalf("legacy fields changed on unrelated update: %#v", reloadedLegacy)
 	}
 }
 

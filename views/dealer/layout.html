@@ -1,12 +1,14 @@
 <!doctype html>
-<html lang="tr">
+<html lang="{{.Locale.HTMLTag}}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{.Title}} | Gateway Üye İşyeri Portalı</title>
+  <title>{{.Title}} | {{ t .Locale "PayHarbor Merchant Portal" }}</title>
   <link rel="stylesheet" href="/assets/tailwind.css">
   {{if or (eq .Active "home") (eq .Active "login") (eq .Active "register")}}<link rel="stylesheet" href="/assets/home.css">{{end}}
   {{if or .AdminPanel (and .HasSession (ne .Active "home"))}}<link rel="stylesheet" href="/assets/admin.css">{{end}}
+  <script src="/assets/portal-i18n.js" defer></script>
+  {{if .I18NJSON}}<script type="application/json" id="{{.I18NElementID}}">{{.I18NJSON}}</script>{{end}}
   <script src="/assets/dashboard.js" defer></script>
 </head>
 <body class="min-h-screen bg-[#f8f8fa] text-ink antialiased {{if .AdminPanel}}admin-vscode-body{{else if eq .Active "home"}}home-public-body{{else if .HasSession}}admin-vscode-body merchant-shell-body{{else if or (eq .Active "login") (eq .Active "register")}}merchant-public-body{{end}}">

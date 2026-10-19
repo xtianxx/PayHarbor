@@ -33,6 +33,36 @@ function initMerchantFastNavigation() {
   var cacheTTL = 10000;
   var navigationSequence = 0;
 
+  // The document's canonical locale, read from the server-rendered bundle (the same value
+  // the HTML lang attribute carries). Fast-navigation partials must render in this locale,
+  // never in a locale another tab wrote into the shared portal cookie.
+  function documentLocale() {
+    var fromBundle = null;
+    try {
+      var parsed = JSON.parse(document.getElementById('portal-i18n-data').textContent);
+      if (parsed && (parsed.locale === 'en' || parsed.locale === 'zh-CN')) fromBundle = parsed.locale;
+    } catch (error) {
+      fromBundle = null;
+    }
+    var fromHTML = document.documentElement.lang === 'en' ? 'en' : (document.documentElement.lang === 'zh-CN' ? 'zh-CN' : null);
+    if (fromBundle && fromHTML && fromBundle !== fromHTML) return null;   // conflicting context: no fast navigation
+    return fromBundle || fromHTML;                                        // null when the document locale is unknown
+  }
+
+  // Keep both language links pointing at the page the user is actually looking at, so a
+  // switch returns here (path, query duplicates and hash) instead of the first panel.
+  function syncLanguageLinks(url) {
+    var links = document.querySelectorAll('a[hreflang]');
+    for (var i = 0; i < links.length; i++) {
+      var link = links[i];
+      var target = link.getAttribute('hreflang');
+      if (target !== 'en' && target !== 'zh-CN') continue;
+      var next = new URL(url.href);
+      next.searchParams.set('lang', target);
+      link.setAttribute('href', next.pathname + next.search + next.hash);
+    }
+  }
+
   function routeURL(anchor) {
     if (!anchor || !anchor.href || anchor.target || anchor.hasAttribute('download')) return null;
     var url;
@@ -43,25 +73,42 @@ function initMerchantFastNavigation() {
     }
     if (url.origin !== window.location.origin) return null;
     if (!/^\/merchant\/(?:dashboard(?:\/|$)|domains\/?$)/.test(url.pathname)) return null;
+    // Locale switches are query-driven (path?lang=xx). A fetch would follow the 303 and the
+    // server would rotate the shared language cookie while this document keeps its own
+    // locale, so a later partial could render in another language. Locale links therefore
+    // always navigate as whole pages, which keeps cookie, html lang and bundle in sync.
+    if (url.searchParams.has('lang') || (anchor && typeof anchor.hasAttribute === 'function' && anchor.hasAttribute('hreflang'))) return null;
     return url;
   }
 
   function loadRoute(url) {
-    var key = url.pathname + url.search;
+    var locale = documentLocale();
+    if (!locale) return Promise.reject(new Error('Unknown document locale'));
+    var key = locale + '|' + url.pathname + url.search;
     var cached = cache.get(key);
     if (cached && Date.now() - cached.createdAt < cacheTTL) {
       return cached.promise;
     }
 
-    var promise = fetch(key, {
+    var promise = fetch(url.pathname + url.search, {
       method: 'GET',
       credentials: 'same-origin',
       headers: {
         'Accept': 'text/html',
         'X-Merchant-Navigation': 'partial',
+        'X-Merchant-Locale': locale,
       },
     }).then(function (response) {
-      if (!response.ok) throw new Error('Route yüklenemedi: HTTP ' + response.status);
+      if (!response.ok) throw new Error('Failed to load route: HTTP ' + response.status);
+      // Fail closed: the response must declare exactly the locale this request captured,
+      // and this document must still be in that locale when the body arrives. A missing or
+      // unexpected value must never be injected into the page.
+      var served = response.headers.get('X-Merchant-Locale');
+      if (served !== locale || documentLocale() !== locale) {
+        var mismatch = new Error('Route rendered in ' + served + ' while this document is ' + locale);
+        mismatch.localeMismatch = true;
+        throw mismatch;
+      }
       return response.text();
     }).catch(function (error) {
       cache.delete(key);
@@ -92,7 +139,7 @@ function initMerchantFastNavigation() {
     var parsed = new DOMParser().parseFromString(html, 'text/html');
     var incoming = parsed.querySelector('.merchant-workbench');
     var current = document.querySelector('.merchant-workbench');
-    if (!incoming || !current) throw new Error('Merchant workspace bulunamadı.');
+    if (!incoming || !current) throw new Error('Merchant workspace not found.');
 
     document.body.classList.remove('merchant-modal-open');
     current.querySelectorAll('.adm-wrap.kewl-grid').forEach(function (grid) {
@@ -106,6 +153,7 @@ function initMerchantFastNavigation() {
     if (pushHistory) {
       window.history.pushState({ merchantRoute: true }, '', url.pathname + url.search + url.hash);
     }
+    syncLanguageLinks(url);
     initMerchantWorkspace();
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
     document.dispatchEvent(new CustomEvent('merchant:route-ready', {
@@ -123,7 +171,9 @@ function initMerchantFastNavigation() {
     }).catch(function () {
       if (sequence !== navigationSequence) return;
       finishPending();
-      if (pushHistory) {
+      // A locale mismatch (or any failed partial) must never be injected into this
+      // document: fall back to a real navigation, which re-renders and re-syncs the locale.
+      if (pushHistory || arguments[0] && arguments[0].localeMismatch) {
         window.location.assign(url.href);
       } else {
         window.location.reload();
@@ -150,6 +200,10 @@ function initMerchantFastNavigation() {
   });
   window.addEventListener('popstate', function () {
     var url = new URL(window.location.href);
+    if (url.searchParams.has('lang')) {
+      window.location.assign(url.href);
+      return;
+    }
     if (!/^\/merchant\/(?:dashboard(?:\/|$)|domains\/?$)/.test(url.pathname)) {
       window.location.reload();
       return;
@@ -168,7 +222,7 @@ function handleTestWebhookClick(event) {
   if (!resultEl) return;
 
   btn.disabled = true;
-  btn.textContent = 'Gönderiliyor...';
+  btn.textContent = portalT('Sending...');
   resultEl.className = 'mt-2 rounded-2xl border p-3 text-xs font-semibold';
   resultEl.textContent = '';
 
@@ -183,8 +237,8 @@ function handleTestWebhookClick(event) {
       if (data.success) {
         resultEl.classList.add('border-green-200', 'bg-green-50', 'text-green-800');
 		resultEl.textContent = notificationMode === 'nats'
-		  ? 'NATS subject\'ine test mesajı başarıyla publish edildi.'
-		  : 'HTTP ' + data.status_code + ' - webhook başarıyla iletildi.';
+		  ? portalT('Test message published to the NATS subject successfully.')
+		  : portalT('HTTP %s - webhook delivered successfully.', data.status_code);
       } else {
         resultEl.classList.add('border-red-200', 'bg-red-50', 'text-red-800');
         resultEl.textContent = data.error || ('HTTP ' + data.status_code);
@@ -194,11 +248,11 @@ function handleTestWebhookClick(event) {
     .catch(function (err) {
       resultEl.classList.remove('hidden');
       resultEl.classList.add('border-red-200', 'bg-red-50', 'text-red-800');
-      resultEl.textContent = 'İstek başarısız: ' + err.message;
+      resultEl.textContent = portalT('Request failed: %s', err.message);
     })
     .finally(function () {
       btn.disabled = false;
-		btn.textContent = 'Test et';
+		btn.textContent = portalT('Test');
 	});
 }
 
@@ -242,16 +296,16 @@ function handleRotateAPISecretClick(event) {
   var resultEl = document.getElementById('api-secret-result-' + domainID);
   if (!domainID || !confirmation || !resultEl) return;
 
-  if (!window.confirm('API secret rotate edilecek. Mevcut secret hemen iptal edilir. Devam edilsin mi?')) {
+  if (!window.confirm(portalT('The API secret will be rotated. The current secret is revoked immediately. Continue?'))) {
     return;
   }
 
   btn.disabled = true;
   var originalText = btn.textContent;
-  btn.textContent = 'Rotating...';
+  btn.textContent = portalT('Rotating...');
   resultEl.hidden = false;
   resultEl.className = 'merchant-secret-result';
-  resultEl.textContent = 'Rotation isteği gönderildi.';
+  resultEl.textContent = portalT('Rotation request sent.');
 
   var body = new URLSearchParams();
   body.set('confirm_rotate', confirmation);
@@ -268,7 +322,7 @@ function handleRotateAPISecretClick(event) {
     .then(function (response) {
       return response.json().then(function (data) {
         if (!response.ok) {
-          throw new Error(data.error || data.message || 'Rotation başarısız');
+          throw new Error(data.error || data.message || portalT('Rotation failed'));
         }
         return data;
       });
@@ -277,16 +331,16 @@ function handleRotateAPISecretClick(event) {
       var secret = data.api_secret || '';
       resultEl.textContent = '';
       var title = document.createElement('strong');
-      title.textContent = 'Yeni API secret bir kez gösteriliyor';
+      title.textContent = portalT('New API secret is shown only once');
       var copy = document.createElement('button');
       copy.className = 'merchant-row-button';
       copy.type = 'button';
       copy.setAttribute('data-copy-value', secret);
-      copy.textContent = 'Secret kopyala';
+      copy.textContent = portalT('Copy secret');
       var code = document.createElement('code');
       code.textContent = secret;
       var note = document.createElement('span');
-      note.textContent = 'Bu değer tekrar gösterilmez. Secret manager tarafına kaydedin; eski secret hemen iptal edildi.';
+      note.textContent = portalT('This value is not shown again. Save it to your secret manager; the old secret has been revoked immediately.');
       resultEl.appendChild(title);
       resultEl.appendChild(copy);
       resultEl.appendChild(code);
@@ -322,7 +376,7 @@ function handleCopyClick(event) {
     originalText = button.innerText;
     button.setAttribute('data-copy-original-text', originalText);
   }
-  button.innerText = 'Kopyalandı';
+  button.innerText = portalT('Copied');
   window.setTimeout(function () {
     button.innerText = originalText;
   }, 1200);
@@ -393,6 +447,19 @@ function initPaymentLinkTypeToggle() {
   });
 }
 
+// canonicalProductLanguage mirrors the server rule for a payment-link language that reaches
+// the edit form: only the two supported values exist, English aliases stay English, and every
+// other stored value (the retired "tr", junk) resolves to the zh-CN default. Without it a
+// dataset value that the select has no option for would leave the select blank and submit an
+// empty language, silently rewriting the stored choice.
+function canonicalProductLanguage(value) {
+  var raw = String(value || '').trim().toLowerCase().replace(/_/g, '-');
+  if (raw === 'en' || raw === 'en-us' || raw === 'en-gb') {
+    return 'en';
+  }
+  return 'zh-CN';
+}
+
 function initMerchantProductEditModal() {
   var form = document.querySelector('[data-product-edit-form]');
   if (!form) return;
@@ -411,7 +478,7 @@ function initMerchantProductEditModal() {
         description: button.getAttribute('data-product-description') || '',
         logo_url: button.getAttribute('data-product-logo-url') || '',
         link_type: button.getAttribute('data-product-link-type') || 'fixed',
-        language: (button.getAttribute('data-product-language') || 'tr').toLowerCase(),
+        language: canonicalProductLanguage(button.getAttribute('data-product-language')),
         amount: button.getAttribute('data-product-amount') || '',
         currency: button.getAttribute('data-product-currency') || 'USD',
         default_asset: button.getAttribute('data-product-default-asset') || '',
@@ -501,28 +568,28 @@ function initMerchantChainVisibility() {
       if (state) {
         state.classList.toggle('is-visible', !shouldHide);
         state.classList.toggle('is-hidden', shouldHide);
-        state.textContent = locked ? 'Politika' : (shouldHide ? 'Gizli' : 'Görünür');
+        state.textContent = locked ? portalT('Policy') : (shouldHide ? portalT('Hidden') : portalT('Visible'));
       }
       var button = card.querySelector('[data-chain-toggle]');
       if (button) {
         button.disabled = locked;
-        button.textContent = locked ? 'Kilitli' : (shouldHide ? 'Göster' : 'Gizle');
-        button.setAttribute('aria-label', (shouldHide ? 'Göster: ' : 'Gizle: ') + (card.getAttribute('data-chain') || 'ağ'));
+        button.textContent = locked ? portalT('Locked') : (shouldHide ? portalT('Show') : portalT('Hide'));
+        button.setAttribute('aria-label', portalT(shouldHide ? 'Show: %s' : 'Hide: %s', card.getAttribute('data-chain') || portalT('network')));
       }
     }
 
     function move(card, toHidden, shouldAnnounce) {
       if (!card) return;
-      var chain = card.getAttribute('data-chain') || 'Ağ';
+      var chain = card.getAttribute('data-chain') || portalT('Network');
       if (!toHidden && isLocked(card)) {
-        announce(chain + ' testnet politikası nedeniyle kilitli. Önce testnet filtresini kapatın.');
+        announce(portalT('%s is locked by the testnet policy. Turn off the testnet filter first.', chain));
         return;
       }
       card.setAttribute('data-chain-explicit-hidden', toHidden ? 'true' : 'false');
       updateCard(card);
       serialize();
       if (shouldAnnounce) {
-        announce(chain + (toHidden ? ' gizli ağlara taşındı.' : ' görünür ağlara taşındı.'));
+        announce(portalT(toHidden ? '%s moved to hidden networks.' : '%s moved to visible networks.', chain));
       }
       card.focus({ preventScroll: true });
     }
@@ -543,7 +610,7 @@ function initMerchantChainVisibility() {
       card.addEventListener('dragstart', function (event) {
         if (isLocked(card)) {
           event.preventDefault();
-          announce('Testnet politikasıyla kilitli ağ taşınamaz.');
+          announce(portalT('A network locked by the testnet policy cannot be moved.'));
           return;
         }
         draggingCard = card;
@@ -580,7 +647,7 @@ function initMerchantChainVisibility() {
     testnetToggle.addEventListener('change', function () {
       cards().forEach(updateCard);
       serialize();
-      announce(testnetToggle.checked ? 'Testnet politikası etkinleştirildi.' : 'Testnet politikası kapatıldı.');
+      announce(testnetToggle.checked ? portalT('Testnet policy enabled.') : portalT('Testnet policy disabled.'));
     });
     form.addEventListener('submit', serialize);
     serialize();
@@ -826,17 +893,17 @@ function initMerchantRescanFeedback() {
       form.setAttribute('data-submitting', 'true');
       if (submit) {
         submit.disabled = true;
-        submit.textContent = 'İşleniyor...';
+        submit.textContent = portalT('Processing...');
       }
       if (feedback) feedback.hidden = false;
-      if (feedbackText) feedbackText.textContent = 'İstek gönderildi; blockchain RPC yanıtı bekleniyor.';
+      if (feedbackText) feedbackText.textContent = portalT('Request sent; waiting for the blockchain RPC response.');
 
       if (timer) window.clearInterval(timer);
       timer = window.setInterval(function () {
         var seconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-        if (elapsed) elapsed.textContent = seconds + ' sn';
+        if (elapsed) elapsed.textContent = portalT('%s s', seconds);
         if (feedbackText && seconds >= 20) {
-          feedbackText.textContent = 'RPC yanıtı bekleniyor; işlem devam ediyor.';
+          feedbackText.textContent = portalT('Waiting for the RPC response; the transaction is still in progress.');
         }
       }, 1000);
     });
@@ -993,11 +1060,11 @@ function initMerchantWithdrawalBalance() {
       maxButton.removeAttribute('data-max-raw');
 
       if (!walletID || !assetOption || !assetOption.value) {
-        availableDisplay.textContent = 'Reserve cüzdan ve asset seçin';
+        availableDisplay.textContent = portalT('Select a reserve wallet and asset');
         return;
       }
       if (!balance || !isPositiveIntegerString(balance.availableRaw)) {
-        availableDisplay.textContent = 'Seçili asset için kullanılabilir bakiye yok';
+        availableDisplay.textContent = portalT('No available balance for the selected asset');
         return;
       }
 
@@ -1142,7 +1209,7 @@ function initAdminRichSelects() {
     search.type = 'search';
     search.autocomplete = 'off';
     search.spellcheck = false;
-    search.placeholder = 'Ara';
+    search.placeholder = portalT('Search');
 
     optionsEl.className = 'admin-rich-options';
     optionsEl.setAttribute('role', 'listbox');
@@ -1213,7 +1280,7 @@ function initAdminRichSelects() {
       if (records.length === 0) {
         var empty = document.createElement('div');
         empty.className = 'admin-rich-empty';
-        empty.textContent = 'Sonuç yok';
+        empty.textContent = portalT('No results');
         optionsEl.appendChild(empty);
         return;
       }
@@ -1504,10 +1571,10 @@ function initAdminRichSelects() {
       preview.appendChild(head);
 
       [
-        ['Domain ID', record.details.domainID],
-        ['Wallet', record.details.wallet || record.value],
-        ['Owner', record.details.owner],
-        ['Wallet ID', record.value],
+        [portalT('Domain ID'), record.details.domainID],
+        [portalT('Wallet'), record.details.wallet || record.value],
+        [portalT('Owner'), record.details.owner],
+        [portalT('Wallet ID'), record.value],
       ].forEach(function (item) {
         if (!item[1]) return;
         var cell = document.createElement('div');
@@ -1634,7 +1701,7 @@ function initRecoverFundsBalance() {
       if (!option.value) {
         option.hidden = false;
         option.disabled = false;
-        option.textContent = hasChain ? 'Asset seç' : 'Önce chain seç';
+        option.textContent = hasChain ? portalT('Select asset') : portalT('Select a chain first');
         return;
       }
       var allowed = hasChain && compactText(option.getAttribute('data-chain-id') || '') === chainValue;
@@ -1649,7 +1716,7 @@ function initRecoverFundsBalance() {
     if (!selectedAllowed) {
       assetSelect.value = '';
     }
-    assetSelect.setAttribute('data-placeholder', hasChain ? (visibleCount ? 'Asset seç' : 'Bu chain için asset yok') : 'Önce chain seç');
+    assetSelect.setAttribute('data-placeholder', hasChain ? (visibleCount ? portalT('Select asset') : portalT('No assets for this chain')) : portalT('Select a chain first'));
     notifyRecoverAssetSelectChanged();
   }
 
@@ -1679,7 +1746,7 @@ function initRecoverFundsBalance() {
     if (!selectedAllowed) {
       walletSelect.value = '';
     }
-    walletSelect.setAttribute('data-placeholder', hasAsset ? (visibleCount ? 'Bakiye olan source wallet seç' : 'Bu asset için bakiyeli wallet yok') : (chainSelect ? 'Önce chain ve asset seç' : 'Önce asset seç'));
+    walletSelect.setAttribute('data-placeholder', hasAsset ? (visibleCount ? portalT('Select a source wallet with a balance') : portalT('No wallet with a balance for this asset')) : (chainSelect ? portalT('Select a chain and asset first') : portalT('Select an asset first')));
     walletSelect.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
@@ -1771,17 +1838,17 @@ function initRecoverFundsBalance() {
     maxButton.disabled = true;
     liveRefreshButton.disabled = true;
     maxButton.removeAttribute('data-max-raw');
-    resetRecoverLiveBalance('Canlı chain: -', 'Raw: -');
+    resetRecoverLiveBalance(portalT('Live chain: -'), portalT('Raw: -'));
 
     if (!walletID || !assetKey) {
-      balanceDisplay.textContent = 'Wallet ve asset seç';
-      balanceRaw.textContent = 'Raw: -';
-      balanceState.textContent = 'Bekliyor';
+      balanceDisplay.textContent = portalT('Select wallet and asset');
+      balanceRaw.textContent = portalT('Raw: -');
+      balanceState.textContent = portalT('Waiting');
       return;
     }
 
     liveRefreshButton.disabled = false;
-    resetRecoverLiveBalance('Canlı chain: Refresh ile oku', 'Raw: -');
+    resetRecoverLiveBalance(portalT('Live chain: use Refresh to read'), portalT('Raw: -'));
     var balance = balances[walletID + '::' + assetKey] || {
       chain: '',
       symbol: symbol,
@@ -1790,16 +1857,16 @@ function initRecoverFundsBalance() {
       locked: '',
       lockedRaw: '0',
     };
-    var label = balance.symbol || symbol || 'Asset';
+    var label = balance.symbol || symbol || portalT('Asset');
     balanceDisplay.textContent = balance.available + ' ' + label;
-    balanceRaw.textContent = 'Raw: ' + balance.availableRaw + (balance.locked ? ' · Locked: ' + balance.locked : '');
+    balanceRaw.textContent = portalT('Raw: %s', balance.availableRaw) + (balance.locked ? ' · ' + portalT('Locked: %s', balance.locked) : '');
 
     if (isPositiveIntegerString(balance.availableRaw)) {
       if (selectedAssetIsNative()) {
-        balanceState.textContent = 'Fee için Refresh gerekli';
+        balanceState.textContent = portalT('Refresh required for fee');
         return;
       }
-      balanceState.textContent = 'Kullanılabilir';
+      balanceState.textContent = portalT('Available');
       maxButton.disabled = false;
       maxButton.setAttribute('data-max-raw', balance.availableRaw);
       return;
@@ -1807,16 +1874,16 @@ function initRecoverFundsBalance() {
 
     if (isPositiveIntegerString(balance.lockedRaw)) {
       if (selectedAssetIsNative()) {
-        balanceState.textContent = 'Locked bakiye: fee için Refresh gerekli';
+        balanceState.textContent = portalT('Locked balance: Refresh required for fee');
         return;
       }
-      balanceState.textContent = 'Sweep-locked kullanılabilir';
+      balanceState.textContent = portalT('Sweep-locked available');
       maxButton.disabled = false;
       maxButton.setAttribute('data-max-raw', balance.lockedRaw);
       return;
     }
 
-    balanceState.textContent = 'Bakiye yok';
+    balanceState.textContent = portalT('No balance');
   }
 
   var liveBalanceRequestID = 0;
@@ -1838,13 +1905,13 @@ function initRecoverFundsBalance() {
     liveBalanceRequestID = requestID;
 
     if (!walletID || !assetValue) {
-      resetRecoverLiveBalance('Canlı chain: -', 'Raw: -');
+      resetRecoverLiveBalance(portalT('Live chain: -'), portalT('Raw: -'));
       liveRefreshButton.disabled = true;
       return;
     }
 
     liveRefreshButton.disabled = true;
-    resetRecoverLiveBalance('Canlı chain: sorgulanıyor...', 'Raw: -');
+    resetRecoverLiveBalance(portalT('Live chain: querying...'), portalT('Raw: -'));
     var params = new URLSearchParams();
     params.set('wallet_id', walletID);
     params.set('asset', assetValue);
@@ -1856,7 +1923,7 @@ function initRecoverFundsBalance() {
       .then(function (response) {
         return response.json().then(function (payload) {
           if (!response.ok || !payload || payload.result !== 'success') {
-            throw new Error((payload && payload.message) || 'Canlı bakiye okunamadı');
+            throw new Error((payload && payload.message) || portalT('Live balance could not be read'));
           }
           return payload;
         });
@@ -1871,9 +1938,9 @@ function initRecoverFundsBalance() {
         var feeRaw = compactText(payload.network_fee_raw || '0');
         var feeError = compactText(payload.network_fee_error || '');
         var transferableRaw = compactText(payload.transferable_raw || '0');
-        var feeText = isPositiveIntegerString(feeRaw) ? ' · Fee raw: ' + feeRaw : (feeError ? ' · Fee okunamadı' : '');
-        var transferableText = isPositiveIntegerString(transferableRaw) ? ' · Net raw: ' + transferableRaw : '';
-        resetRecoverLiveBalance('Canlı chain: ' + formatted + ' ' + symbol, 'Raw: ' + raw + feeText + transferableText + (address ? ' · ' + address : ''));
+        var feeText = isPositiveIntegerString(feeRaw) ? ' · ' + portalT('Fee raw: %s', feeRaw) : (feeError ? ' · ' + portalT('Fee could not be read') : '');
+        var transferableText = isPositiveIntegerString(transferableRaw) ? ' · ' + portalT('Net raw: %s', transferableRaw) : '';
+        resetRecoverLiveBalance(portalT('Live chain: %s %s', formatted, symbol), portalT('Raw: %s', raw) + feeText + transferableText + (address ? ' · ' + address : ''));
         if (liveExplorerLink && explorerURL) {
           liveExplorerLink.href = explorerURL;
           liveExplorerLink.hidden = false;
@@ -1888,17 +1955,17 @@ function initRecoverFundsBalance() {
           if (isPositiveIntegerString(feeRaw) && compareIntegerStrings(grossMaxRaw, feeRaw) > 0) {
             maxButton.disabled = false;
             maxButton.setAttribute('data-max-raw', grossMaxRaw);
-            balanceState.textContent = isPositiveIntegerString(balance.availableRaw) ? 'Fee sonrası kullanılabilir' : 'Locked bakiye transfer edilebilir';
-            balanceRaw.textContent = 'Raw: ' + balance.availableRaw + (balance.locked ? ' · Locked: ' + balance.locked : '') + ' · Max raw: ' + grossMaxRaw + ' · Fee raw: ' + feeRaw + ' · Net transfer raw: ' + subtractIntegerStrings(grossMaxRaw, feeRaw);
+            balanceState.textContent = isPositiveIntegerString(balance.availableRaw) ? portalT('Available after fee') : portalT('Locked balance can be transferred');
+            balanceRaw.textContent = portalT('Raw: %s', balance.availableRaw) + (balance.locked ? ' · ' + portalT('Locked: %s', balance.locked) : '') + ' · ' + portalT('Max raw: %s', grossMaxRaw) + ' · ' + portalT('Fee raw: %s', feeRaw) + ' · ' + portalT('Net transfer raw: %s', subtractIntegerStrings(grossMaxRaw, feeRaw));
           } else {
-            balanceState.textContent = 'Fee sonrası transfer yok';
+            balanceState.textContent = portalT('No transfer after fee');
           }
         }
         liveRefreshButton.disabled = false;
       })
       .catch(function (error) {
         if (requestID !== liveBalanceRequestID) return;
-        resetRecoverLiveBalance('Canlı chain: okunamadı', compactText(error.message || 'Bilinmeyen hata'));
+        resetRecoverLiveBalance(portalT('Live chain: could not be read'), compactText(error.message || portalT('Unknown error')));
         liveRefreshButton.disabled = false;
       });
   }
@@ -2117,14 +2184,14 @@ function enhanceAdminGridPagination(wrap, tableID) {
   pagerShell.setAttribute('data-grid-pagination', tableID || '');
   pager.classList.add('kewl-grid-pagination-controls');
   if (!pager.getAttribute('aria-label')) {
-    pager.setAttribute('aria-label', 'Sayfalama');
+    pager.setAttribute('aria-label', portalT('Pagination'));
   }
 }
 
 function enhanceAdminGridToolbar(toolbar, tableID, table) {
   if (toolbar.getAttribute('data-grid-toolbar-ready') === 'true') return;
   toolbar.setAttribute('data-grid-toolbar-ready', 'true');
-  toolbar.setAttribute('aria-label', table.getAttribute('data-grid-title') || 'Data grid araçları');
+  toolbar.setAttribute('aria-label', table.getAttribute('data-grid-title') || portalT('Data grid tools'));
 }
 
 function enhanceAdminGridHeaders(table) {
@@ -2295,7 +2362,15 @@ function compareAdminDataTableRows(left, right, sortState) {
   if (sortState.type === 'number') {
     return compareIntegerStrings(leftValue, rightValue);
   }
-  return normalize(leftValue).localeCompare(normalize(rightValue), 'tr', {
+  // Display sorting follows the page locale; each locale pins its own collation so the
+  // English portal keeps the row order it had before the portal became bilingual.
+  if (portalLocale() === 'zh-CN') {
+    return normalize(leftValue).localeCompare(normalize(rightValue), 'zh-CN', {
+      numeric: true,
+      sensitivity: 'base',
+    });
+  }
+  return normalize(leftValue).localeCompare(normalize(rightValue), 'en', {
     numeric: true,
     sensitivity: 'base',
   });
@@ -2420,6 +2495,9 @@ function normalizeIntegerString(value) {
 }
 
 function normalizeAssetKey(value) {
+  // Technical locale, intentionally NOT switched to en-US: this key feeds ledger and
+  // balance lookups (data-asset-key / data-balance-key matching), so it must keep the
+  // original Turkish casing rules. Display filtering uses normalize() below instead.
   return compactText(value).toLocaleLowerCase('tr-TR');
 }
 
@@ -2534,7 +2612,7 @@ function selectPlaceholder(select) {
     var labelText = compactText(clone.textContent);
     if (labelText) return labelText;
   }
-  return 'Seç';
+  return portalT('Select');
 }
 
 function compactText(value) {
@@ -2542,7 +2620,13 @@ function compactText(value) {
 }
 
 function normalize(value) {
-  return compactText(value).toLocaleLowerCase('tr-TR');
+  // Display filtering follows the page locale; the English portal keeps its original
+  // en-US casing, while asset/balance lookups keep their technical tr-TR rules
+  // (normalizeAssetKey above).
+  if (portalLocale() === 'zh-CN') {
+    return compactText(value).toLocaleLowerCase('zh-CN');
+  }
+  return compactText(value).toLocaleLowerCase('en-US');
 }
 
 function initials(value) {

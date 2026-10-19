@@ -3,28 +3,28 @@
     <div class="home-hero-panel">
       <div class="home-hero-copy">
         <p class="home-product-name">
-          <span>G</span>
-          Gateway Checkout
+          <span>P</span>
+          {{ t .Locale "PayHarbor Checkout" }}
         </p>
-        <h1 id="homeTitle">Crypto payments that settle cleanly.</h1>
-        <p class="home-lead">Hosted checkout, payment links, donation links, owned deposit addresses and signed webhooks in one merchant-ready flow.</p>
+        <h1 id="homeTitle">{{ t .Locale "Crypto payments that settle cleanly." }}</h1>
+        <p class="home-lead">{{ t .Locale "Hosted checkout, payment links, donation links, owned deposit addresses and signed webhooks in one merchant-ready flow." }}</p>
 
-        <div class="home-actions" aria-label="Başlangıç aksiyonları">
-          <a class="home-button home-button-light" href="{{if .HasSession}}{{.DashboardURL}}{{else}}{{.RegisterURL}}{{end}}">{{if .HasSession}}Dashboard{{else}}Create payment link{{end}}</a>
-          <a class="home-button" href="{{.LoginURL}}">Merchant dashboard</a>
-          <a class="home-button" href="/swagger/index.html">API docs</a>
+        <div class="home-actions" aria-label="{{ t .Locale "Getting started actions" }}">
+          <a class="home-button home-button-light" href="{{if .HasSession}}{{.DashboardURL}}{{else}}{{.RegisterURL}}{{end}}">{{if .HasSession}}{{ t .Locale "Dashboard" }}{{else}}{{ t .Locale "Create payment link" }}{{end}}</a>
+          <a class="home-button" href="{{.LoginURL}}">{{ t .Locale "Merchant dashboard" }}</a>
+          <a class="home-button" href="/swagger/index.html">{{ t .Locale "API docs" }}</a>
         </div>
       </div>
 
-      <div class="home-device-stage" aria-label="Gateway checkout preview">
+      <div class="home-device-stage" aria-label="{{ t .Locale "PayHarbor checkout preview" }}">
         <div class="home-device home-device-side is-left" aria-hidden="true">
           <div class="home-device-bar"></div>
           <div class="home-device-screen">
-            <span class="home-device-label">Payment link</span>
+            <span class="home-device-label">{{ t .Locale "Payment link" }}</span>
             <strong>$49.00</strong>
             <div class="home-pay-option"><span><img src="/static/coins/usdt.svg" alt=""> USDT</span><small>TRON</small></div>
             <div class="home-pay-option"><span><img src="/static/coins/usdc.svg" alt=""> USDC</span><small>Base</small></div>
-            <button type="button">Pay now</button>
+            <button type="button">{{ t .Locale "Pay now" }}</button>
           </div>
         </div>
 
@@ -32,8 +32,8 @@
           <div class="home-device-bar"></div>
           <div class="home-device-screen">
             <div class="home-device-head">
-              <span>Gateway</span>
-              <small>live</small>
+              <span>PayHarbor</span>
+              <small>{{ t .Locale "live" }}</small>
             </div>
             <strong class="home-device-total">$43,251.56</strong>
             <div class="home-network-pills">
@@ -41,14 +41,14 @@
               <span><img src="/static/chains/tronchain.svg" alt=""> TRON</span>
             </div>
             <div class="home-session-card">
-              <span>Checkout session</span>
+              <span>{{ t .Locale "Checkout session" }}</span>
               <strong>0x2e71...f1bd</strong>
-              <small>12 confirmations</small>
+              <small>{{ t .Locale "12 confirmations" }}</small>
             </div>
             <div class="home-event-list">
-              <span><i></i>payment.created<small>now</small></span>
-              <span><i></i>deposit.detected<small>2m</small></span>
-              <span><i></i>payment.confirmed<small>8m</small></span>
+              <span><i></i>payment.created<small>{{ t .Locale "now" }}</small></span>
+              <span><i></i>deposit.detected<small>{{ t .Locale "2m" }}</small></span>
+              <span><i></i>payment.confirmed<small>{{ t .Locale "8m" }}</small></span>
             </div>
           </div>
         </div>
@@ -56,7 +56,7 @@
         <div class="home-device home-device-side is-right" aria-hidden="true">
           <div class="home-device-bar"></div>
           <div class="home-device-screen">
-            <span class="home-device-label">Donation</span>
+            <span class="home-device-label">{{ t .Locale "Donation" }}</span>
             <strong>1.00 CHZ</strong>
             <div class="home-qr" aria-hidden="true">
               <span></span><span></span><span></span><span></span>
@@ -64,46 +64,46 @@
               <span></span><span></span><span></span><span></span>
               <span></span><span></span><span></span><span></span>
             </div>
-            <button type="button">Confirmed</button>
+            <button type="button">{{ t .Locale "Confirmed" }}</button>
           </div>
         </div>
       </div>
     </div>
   </section>
 
-  <section class="home-strip" aria-label="Gateway payment capabilities">
+  <section class="home-strip" aria-label="{{ t .Locale "PayHarbor payment capabilities" }}">
     <div>
-      <strong>Payment links</strong>
-      <span>Product, invoice and donation URLs</span>
+      <strong>{{ t .Locale "Payment links" }}</strong>
+      <span>{{ t .Locale "Product, invoice and donation URLs" }}</span>
     </div>
     <div>
-      <strong>Owned addresses</strong>
-      <span>Deposits tied to your wallet pool</span>
+      <strong>{{ t .Locale "Owned addresses" }}</strong>
+      <span>{{ t .Locale "Deposits tied to your wallet pool" }}</span>
     </div>
     <div>
-      <strong>Finality aware</strong>
-      <span>Pending until confirmations pass</span>
+      <strong>{{ t .Locale "Finality aware" }}</strong>
+      <span>{{ t .Locale "Pending until confirmations pass" }}</span>
     </div>
     <div>
-      <strong>Signed webhooks</strong>
-      <span>Backend-safe status delivery</span>
+      <strong>{{ t .Locale "Signed webhooks" }}</strong>
+      <span>{{ t .Locale "Backend-safe status delivery" }}</span>
     </div>
   </section>
 
   <section class="home-section home-checkout-section" aria-labelledby="homeCheckoutTitle">
     <div class="home-section-head">
-      <h2 id="homeCheckoutTitle">A checkout page customers understand instantly.</h2>
-      <p>Amount, network, wallet address and payment state stay visible without turning the flow into a technical dashboard.</p>
+      <h2 id="homeCheckoutTitle">{{ t .Locale "A checkout page customers understand instantly." }}</h2>
+      <p>{{ t .Locale "Amount, network, wallet address and payment state stay visible without turning the flow into a technical dashboard." }}</p>
     </div>
 
     <div class="home-showcase-grid">
-      <article class="home-checkout-preview" aria-label="Hosted checkout preview">
+      <article class="home-checkout-preview" aria-label="{{ t .Locale "Hosted checkout preview" }}">
         <div class="home-preview-top">
-          <span>Hosted checkout</span>
+          <span>{{ t .Locale "Hosted checkout" }}</span>
           <strong>15:00</strong>
         </div>
         <div class="home-preview-amount">
-          <span>Total due</span>
+          <span>{{ t .Locale "Total due" }}</span>
           <strong>$125.00</strong>
         </div>
         <div class="home-preview-options">
@@ -112,7 +112,7 @@
           <div><img src="/static/coins/chz.svg" alt=""> CHZ <small>Chiliz</small></div>
         </div>
         <div class="home-preview-address">
-          <span>Deposit address</span>
+          <span>{{ t .Locale "Deposit address" }}</span>
           <strong>0x8e69...1a25</strong>
         </div>
       </article>
@@ -120,18 +120,18 @@
       <div class="home-feature-list">
         <article>
           <span>01</span>
-          <h3>Create fast</h3>
-          <p>Generate a hosted checkout or payment link with amount, asset options and return URLs.</p>
+          <h3>{{ t .Locale "Create fast" }}</h3>
+          <p>{{ t .Locale "Generate a hosted checkout or payment link with amount, asset options and return URLs." }}</p>
         </article>
         <article>
           <span>02</span>
-          <h3>Match correctly</h3>
-          <p>Connect deposits to the intended customer, selected chain and expected asset.</p>
+          <h3>{{ t .Locale "Match correctly" }}</h3>
+          <p>{{ t .Locale "Connect deposits to the intended customer, selected chain and expected asset." }}</p>
         </article>
         <article>
           <span>03</span>
-          <h3>Notify safely</h3>
-          <p>Send the final state to merchant systems with signed webhook payloads.</p>
+          <h3>{{ t .Locale "Notify safely" }}</h3>
+          <p>{{ t .Locale "Send the final state to merchant systems with signed webhook payloads." }}</p>
         </article>
       </div>
     </div>
@@ -139,8 +139,8 @@
 
   <section class="home-assets-band" aria-labelledby="homeAssetsTitle">
     <div class="home-assets-copy">
-      <h2 id="homeAssetsTitle">Multi-chain checkout without a messy customer screen.</h2>
-      <p>Offer familiar assets and networks while keeping the payment page calm and directed.</p>
+      <h2 id="homeAssetsTitle">{{ t .Locale "Multi-chain checkout without a messy customer screen." }}</h2>
+      <p>{{ t .Locale "Offer familiar assets and networks while keeping the payment page calm and directed." }}</p>
     </div>
     <div class="home-asset-grid" aria-hidden="true">
       <img src="/static/chains/basechain.svg" alt="">
@@ -160,62 +160,62 @@
 
   <section class="home-section home-pipeline-section" aria-labelledby="homePipelineTitle">
     <div class="home-section-head">
-      <h2 id="homePipelineTitle">From payment creation to settled event.</h2>
-      <p>The product surface stays simple, while the payment pipeline keeps the critical states explicit.</p>
+      <h2 id="homePipelineTitle">{{ t .Locale "From payment creation to settled event." }}</h2>
+      <p>{{ t .Locale "The product surface stays simple, while the payment pipeline keeps the critical states explicit." }}</p>
     </div>
 
     <div class="home-pipeline">
       <article>
         <span>1</span>
-        <h3>Create session</h3>
-        <p>Merchant API or dashboard creates the checkout URL.</p>
+        <h3>{{ t .Locale "Create session" }}</h3>
+        <p>{{ t .Locale "Merchant API or dashboard creates the checkout URL." }}</p>
       </article>
       <article>
         <span>2</span>
-        <h3>Collect deposit</h3>
-        <p>Customer pays the generated address on the selected network.</p>
+        <h3>{{ t .Locale "Collect deposit" }}</h3>
+        <p>{{ t .Locale "Customer pays the generated address on the selected network." }}</p>
       </article>
       <article>
         <span>3</span>
-        <h3>Confirm finality</h3>
-        <p>Payment remains pending until the confirmation gate passes.</p>
+        <h3>{{ t .Locale "Confirm finality" }}</h3>
+        <p>{{ t .Locale "Payment remains pending until the confirmation gate passes." }}</p>
       </article>
       <article>
         <span>4</span>
-        <h3>Deliver webhook</h3>
-        <p>Backend receives a final signed event for reconciliation.</p>
+        <h3>{{ t .Locale "Deliver webhook" }}</h3>
+        <p>{{ t .Locale "Backend receives a final signed event for reconciliation." }}</p>
       </article>
     </div>
   </section>
 
   <section class="home-security-band" aria-labelledby="homeSecurityTitle">
-    <h2 id="homeSecurityTitle">Built for payment operations, not marketing noise.</h2>
-    <p>Owned addresses, clear payment state, confirmation-aware status and signed callbacks keep the merchant flow auditable.</p>
+    <h2 id="homeSecurityTitle">{{ t .Locale "Built for payment operations, not marketing noise." }}</h2>
+    <p>{{ t .Locale "Owned addresses, clear payment state, confirmation-aware status and signed callbacks keep the merchant flow auditable." }}</p>
   </section>
 
   <section class="home-faq-section" aria-labelledby="homeFaqTitle">
-    <h2 id="homeFaqTitle">Frequently asked questions</h2>
+    <h2 id="homeFaqTitle">{{ t .Locale "Frequently asked questions" }}</h2>
     <div class="home-faq-list">
       <details open>
-        <summary>Can Gateway create hosted checkout pages?</summary>
-        <p>Yes. Merchants can create payment sessions and share hosted checkout URLs with customers.</p>
+        <summary>{{ t .Locale "Can PayHarbor create hosted checkout pages?" }}</summary>
+        <p>{{ t .Locale "Yes. Merchants can create payment sessions and share hosted checkout URLs with customers." }}</p>
       </details>
       <details>
-        <summary>Can it be used for payment and donation links?</summary>
-        <p>Yes. The interface supports fixed payment links and flexible donation links.</p>
+        <summary>{{ t .Locale "Can it be used for payment and donation links?" }}</summary>
+        <p>{{ t .Locale "Yes. The interface supports fixed payment links and flexible donation links." }}</p>
       </details>
       <details>
-        <summary>How does my backend receive status?</summary>
-        <p>Final payment state is delivered through signed webhook payloads.</p>
+        <summary>{{ t .Locale "How does my backend receive status?" }}</summary>
+        <p>{{ t .Locale "Final payment state is delivered through signed webhook payloads." }}</p>
       </details>
     </div>
   </section>
 
   <section class="home-cta-band" aria-labelledby="homeCtaTitle">
-    <h2 id="homeCtaTitle">Launch a cleaner crypto checkout.</h2>
+    <h2 id="homeCtaTitle">{{ t .Locale "Launch a cleaner crypto checkout." }}</h2>
     <div class="home-actions home-actions-center">
-      <a class="home-button home-button-light" href="{{if .HasSession}}{{.DashboardURL}}{{else}}{{.RegisterURL}}{{end}}">{{if .HasSession}}Dashboard{{else}}Create payment link{{end}}</a>
-      <a class="home-button" href="/swagger/index.html">API docs</a>
+      <a class="home-button home-button-light" href="{{if .HasSession}}{{.DashboardURL}}{{else}}{{.RegisterURL}}{{end}}">{{if .HasSession}}{{ t .Locale "Dashboard" }}{{else}}{{ t .Locale "Create payment link" }}{{end}}</a>
+      <a class="home-button" href="/swagger/index.html">{{ t .Locale "API docs" }}</a>
     </div>
   </section>
 </div>

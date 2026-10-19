@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"core/constants"
+	"core/localization"
 	"core/services/txrescan"
 )
 
@@ -54,41 +55,41 @@ func TestTxRescanMessages(t *testing.T) {
 	if txRescanRequestTimeout != 90*time.Second {
 		t.Fatalf("txRescanRequestTimeout = %s, want 90s", txRescanRequestTimeout)
 	}
-	if got := txRescanSuccessMessage(&txrescan.Result{Chain: "ethereum", Events: 2}); got != "ethereum tx yeniden tarandı: 2 event işlendi." {
+	if got := txRescanSuccessMessage(localization.EN, &txrescan.Result{Chain: "ethereum", Events: 2}); got != "ethereum transaction rescanned: 2 events processed." {
 		t.Fatalf("success message = %q", got)
 	}
-	got := txRescanSuccessMessage(&txrescan.Result{
+	got := txRescanSuccessMessage(localization.EN, &txrescan.Result{
 		Chain:                "tron",
 		Events:               1,
 		DepositsMatched:      1,
 		TransactionsRecorded: 1,
 		DepositsFinalized:    1,
 	})
-	want := "tron tx yeniden tarandı: 1 event işlendi, 1 deposit eşleşti, 1 transaction kaydedildi, 1 deposit finalize oldu."
+	want := "tron transaction rescanned: 1 events processed, 1 deposits matched, 1 transactions recorded, 1 deposits finalized."
 	if got != want {
 		t.Fatalf("detailed success message = %q, want %q", got, want)
 	}
-	got = txRescanSuccessMessage(&txrescan.Result{Chain: "chiliz", Events: 1, DepositsUnmatched: 1})
-	want = "chiliz tx yeniden tarandı: 1 event işlendi, 1 tx wallet eşleşmedi; deposit yazılmadı."
+	got = txRescanSuccessMessage(localization.EN, &txrescan.Result{Chain: "chiliz", Events: 1, DepositsUnmatched: 1})
+	want = "chiliz transaction rescanned: 1 events processed, 1 transactions did not match a wallet; no deposits written."
 	if got != want {
 		t.Fatalf("unmatched success message = %q, want %q", got, want)
 	}
 	tests := map[error]string{
-		txrescan.ErrTransactionNotFound: "Tx blockchain üzerinde bulunamadı.",
-		txrescan.ErrUnauthorizedTx:      "Bu tx üye işyeri wallet adresleriyle eşleşmiyor.",
-		txrescan.ErrUnsupportedChain:    "Bu blockchain için rescan desteklenmiyor.",
-		context.DeadlineExceeded:        "Rescan zaman aşımına uğradı. İstek gönderildi ancak blockchain RPC yanıtı süresi doldu; tamamlandığı doğrulanamadı. Biraz sonra tekrar dene.",
-		context.Canceled:                "Rescan tamamlanmadan iptal edildi. İşlemin tamamlandığı doğrulanamadı.",
+		txrescan.ErrTransactionNotFound: "Transaction was not found on the blockchain.",
+		txrescan.ErrUnauthorizedTx:      "This transaction does not match the merchant wallet addresses.",
+		txrescan.ErrUnsupportedChain:    "Rescan is not supported for this network.",
+		context.DeadlineExceeded:        "Rescan timed out. The request was sent, but the blockchain RPC response timed out; completion could not be verified. Try again later.",
+		context.Canceled:                "Rescan was canceled before completion. The transaction could not be verified as complete.",
 		errors.New("custom error"):      "custom error",
 	}
 	for err, expected := range tests {
-		if got := txRescanErrorMessage(err); got != expected {
+		if got := txRescanErrorMessage(localization.EN, err); got != expected {
 			t.Fatalf("error message for %v = %q, want %q", err, got, expected)
 		}
 	}
 	wrappedTimeout := errors.New("chiliz https://rpc.chiliz.com request failed: timeout: context deadline exceeded")
-	want = "Rescan zaman aşımına uğradı. İstek gönderildi ancak blockchain RPC yanıtı süresi doldu; tamamlandığı doğrulanamadı. Biraz sonra tekrar dene."
-	if got := txRescanErrorMessage(wrappedTimeout); got != want {
+	want = "Rescan timed out. The request was sent, but the blockchain RPC response timed out; completion could not be verified. Try again later."
+	if got := txRescanErrorMessage(localization.EN, wrappedTimeout); got != want {
 		t.Fatalf("wrapped timeout message = %q, want %q", got, want)
 	}
 }

@@ -21,7 +21,7 @@ import (
 
 func TestSweepJobRepoEnqueueForTransactionIsIdempotent(t *testing.T) {
 	db := openMoneyEventOutboxPostgresTestDB(t)
-	if err := db.AutoMigrate(&models.SweepJob{}); err != nil {
+	if err := db.AutoMigrate(&models.SweepJob{}, &models.OutboundTransaction{}); err != nil {
 		t.Fatalf("automigrate sweep jobs: %v", err)
 	}
 	ctx := context.Background()
@@ -56,7 +56,7 @@ func TestSweepJobRepoEnqueueForTransactionIsIdempotent(t *testing.T) {
 
 func TestSweepJobRepoRevivesReorgDeadLetterOnCanonicalTransactionReappearance(t *testing.T) {
 	db := openMoneyEventOutboxPostgresTestDB(t)
-	if err := db.AutoMigrate(&models.Transaction{}, &models.SweepJob{}); err != nil {
+	if err := db.AutoMigrate(&models.Transaction{}, &models.SweepJob{}, &models.OutboundTransaction{}); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
@@ -104,7 +104,7 @@ func TestSweepJobRepoRevivesReorgDeadLetterOnCanonicalTransactionReappearance(t 
 
 func TestSweepJobRepoRollsBackJobWhenRequestedOutboxCannotPersist(t *testing.T) {
 	db := openMoneyEventOutboxPostgresTestDB(t)
-	if err := db.AutoMigrate(&models.SweepJob{}); err != nil {
+	if err := db.AutoMigrate(&models.SweepJob{}, &models.OutboundTransaction{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Migrator().DropTable(&models.MoneyEventOutbox{}); err != nil {
@@ -416,7 +416,7 @@ func TestSweepJobRepoOperatorRecoveryIsAtomicConcurrentAndIdempotent(t *testing.
 
 func TestSweepJobRepoDefersForNetworkStateWithoutConsumingAttempt(t *testing.T) {
 	db := openMoneyEventOutboxPostgresTestDB(t)
-	if err := db.AutoMigrate(&models.SweepJob{}); err != nil {
+	if err := db.AutoMigrate(&models.SweepJob{}, &models.OutboundTransaction{}); err != nil {
 		t.Fatalf("automigrate sweep jobs: %v", err)
 	}
 	ctx := context.Background()
@@ -449,7 +449,7 @@ func TestSweepJobRepoDefersForNetworkStateWithoutConsumingAttempt(t *testing.T) 
 
 func TestSweepJobRepoClaimDueRecoversStaleProcessingAndSerializesWalletChain(t *testing.T) {
 	db := openMoneyEventOutboxPostgresTestDB(t)
-	if err := db.AutoMigrate(&models.SweepJob{}); err != nil {
+	if err := db.AutoMigrate(&models.SweepJob{}, &models.OutboundTransaction{}); err != nil {
 		t.Fatalf("automigrate sweep jobs: %v", err)
 	}
 	ctx := context.Background()
@@ -504,7 +504,7 @@ func TestSweepJobRepoClaimDueRecoversStaleProcessingAndSerializesWalletChain(t *
 
 func TestSweepJobRepoClaimDueRecoversStaleProcessingWithNilNextRun(t *testing.T) {
 	db := openMoneyEventOutboxPostgresTestDB(t)
-	if err := db.AutoMigrate(&models.SweepJob{}); err != nil {
+	if err := db.AutoMigrate(&models.SweepJob{}, &models.OutboundTransaction{}); err != nil {
 		t.Fatalf("automigrate sweep jobs: %v", err)
 	}
 	ctx := context.Background()
@@ -527,7 +527,7 @@ func TestSweepJobRepoClaimDueRecoversStaleProcessingWithNilNextRun(t *testing.T)
 
 func TestSweepJobRepoActiveProcessingSuppressesSameWalletChain(t *testing.T) {
 	db := openMoneyEventOutboxPostgresTestDB(t)
-	if err := db.AutoMigrate(&models.SweepJob{}); err != nil {
+	if err := db.AutoMigrate(&models.SweepJob{}, &models.OutboundTransaction{}); err != nil {
 		t.Fatalf("automigrate sweep jobs: %v", err)
 	}
 	ctx := context.Background()
@@ -559,7 +559,7 @@ func TestSweepJobRepoRetryDeadLetterAndFailureCategory(t *testing.T) {
 	t.Setenv("SWEEP_RETRY_BACKOFF_BASE", "1s")
 	t.Setenv("SWEEP_RETRY_BACKOFF_MAX", "1m")
 	db := openMoneyEventOutboxPostgresTestDB(t)
-	if err := db.AutoMigrate(&models.SweepJob{}); err != nil {
+	if err := db.AutoMigrate(&models.SweepJob{}, &models.OutboundTransaction{}); err != nil {
 		t.Fatalf("automigrate sweep jobs: %v", err)
 	}
 	ctx := context.Background()
@@ -605,7 +605,7 @@ func TestSweepJobRepoRetryDeadLetterAndFailureCategory(t *testing.T) {
 
 func TestSweepJobRepoPolicyFailureDeadLettersImmediately(t *testing.T) {
 	db := openMoneyEventOutboxPostgresTestDB(t)
-	if err := db.AutoMigrate(&models.SweepJob{}); err != nil {
+	if err := db.AutoMigrate(&models.SweepJob{}, &models.OutboundTransaction{}); err != nil {
 		t.Fatalf("automigrate sweep jobs: %v", err)
 	}
 	ctx := context.Background()
@@ -635,7 +635,7 @@ func TestSweepJobRepoPolicyFailureDeadLettersImmediately(t *testing.T) {
 
 func TestSweepJobRepoBroadcastUncertainIsTerminalAndClassified(t *testing.T) {
 	db := openMoneyEventOutboxPostgresTestDB(t)
-	if err := db.AutoMigrate(&models.SweepJob{}); err != nil {
+	if err := db.AutoMigrate(&models.SweepJob{}, &models.OutboundTransaction{}); err != nil {
 		t.Fatalf("automigrate sweep jobs: %v", err)
 	}
 	ctx := context.Background()
@@ -668,7 +668,7 @@ func TestSweepJobRepoBroadcastUncertainIsTerminalAndClassified(t *testing.T) {
 
 func TestSweepJobRepoSuccessAndPrefundPersistence(t *testing.T) {
 	db := openMoneyEventOutboxPostgresTestDB(t)
-	if err := db.AutoMigrate(&models.SweepJob{}); err != nil {
+	if err := db.AutoMigrate(&models.SweepJob{}, &models.OutboundTransaction{}); err != nil {
 		t.Fatalf("automigrate sweep jobs: %v", err)
 	}
 	ctx := context.Background()
@@ -714,7 +714,7 @@ func TestSweepJobRepoSuccessAndPrefundPersistence(t *testing.T) {
 
 func TestSweepJobRepoPrefundReservationIsIdempotentAndLimitAware(t *testing.T) {
 	db := openMoneyEventOutboxPostgresTestDB(t)
-	if err := db.AutoMigrate(&models.SweepJob{}); err != nil {
+	if err := db.AutoMigrate(&models.SweepJob{}, &models.OutboundTransaction{}); err != nil {
 		t.Fatalf("automigrate sweep jobs: %v", err)
 	}
 	ctx := context.Background()
@@ -766,7 +766,7 @@ func TestSweepJobRepoPrefundReservationIsIdempotentAndLimitAware(t *testing.T) {
 
 func TestSweepJobRepoAssignBatchPersistsPlanMetadata(t *testing.T) {
 	db := openMoneyEventOutboxPostgresTestDB(t)
-	if err := db.AutoMigrate(&models.SweepJob{}); err != nil {
+	if err := db.AutoMigrate(&models.SweepJob{}, &models.OutboundTransaction{}); err != nil {
 		t.Fatalf("automigrate sweep jobs: %v", err)
 	}
 	ctx := context.Background()
@@ -799,19 +799,26 @@ func TestSweepJobRepoOperatorRecoveryActions(t *testing.T) {
 	if err := repo.MarkNeedsOperatorAction(ctx, job.ID, models.SweepOperatorActionReconcileBroadcast, errors.New("broadcast uncertain")); err != nil {
 		t.Fatalf("mark needs operator action: %v", err)
 	}
+	// A10 contract correction (previously this retry was accepted): with the
+	// reconcile marker in place, an operator note claiming "no broadcast found" is
+	// not evidence, so the automatic retry is refused and the job keeps its
+	// dead_letter/marker state. The money rule is unchanged: re-entering the send
+	// queue requires the absence of broadcast evidence, and a success recovery still
+	// needs an explicit hash.
 	retryAt := time.Now().UTC().Add(time.Minute)
-	if err := repo.RecordOperatorRecovery(ctx, job.ID, models.SweepRecoveryActionRetry, "chain lookup found no broadcast; retry permitted", "", &retryAt); err != nil {
-		t.Fatalf("record retry recovery: %v", err)
+	if err := repo.RecordOperatorRecovery(ctx, job.ID, models.SweepRecoveryActionRetry, "chain lookup found no broadcast; retry permitted", "", &retryAt); !errors.Is(err, ErrSweepBroadcastEvidencePresent) {
+		t.Fatalf("retry with a reconcile marker error = %v, want ErrSweepBroadcastEvidencePresent", err)
 	}
-	if err := repo.RecordOperatorRecovery(ctx, job.ID, models.SweepRecoveryActionRetry, "chain lookup found no broadcast; retry permitted", "", &retryAt); err != nil {
-		t.Fatalf("repeat retry recovery should be idempotent: %v", err)
+	if err := repo.RecordOperatorRecovery(ctx, job.ID, models.SweepRecoveryActionRetry, "chain lookup found no broadcast; retry permitted", "", &retryAt); !errors.Is(err, ErrSweepBroadcastEvidencePresent) {
+		t.Fatalf("repeat retry with a reconcile marker error = %v, want ErrSweepBroadcastEvidencePresent", err)
 	}
-	retry, err := repo.Find(ctx, job.ID)
+	pending, err := repo.Find(ctx, job.ID)
 	if err != nil {
 		t.Fatalf("find retry recovery: %v", err)
 	}
-	if retry.Status != models.SweepJobStatusFailed || retry.NextRunAt == nil || retry.OperatorAction != "" || retry.RecoveredAt == nil || retry.RecoveryAction != models.SweepRecoveryActionRetry {
-		t.Fatalf("retry recovery state = %#v", retry)
+	if pending.Status != models.SweepJobStatusDeadLetter || pending.NextRunAt != nil ||
+		pending.OperatorAction != models.SweepOperatorActionReconcileBroadcast {
+		t.Fatalf("fenced retry state = %#v, want the reconcile marker kept", pending)
 	}
 
 	if err := repo.MarkNeedsOperatorAction(ctx, job.ID, models.SweepOperatorActionReconcileBroadcast, errors.New("replacement landed")); err != nil {
@@ -830,7 +837,6 @@ func TestSweepJobRepoOperatorRecoveryActions(t *testing.T) {
 	assertSweepLifecycleEvents(t, db, job.ID,
 		constants.WebhookEventSweepRequestedV1,
 		constants.WebhookEventSweepDeadLetteredV1,
-		constants.WebhookEventSweepFailedV1,
 		constants.WebhookEventSweepDeadLetteredV1,
 		constants.WebhookEventSweepSucceededV1,
 	)
@@ -838,7 +844,7 @@ func TestSweepJobRepoOperatorRecoveryActions(t *testing.T) {
 
 func TestSweepJobRepoTerminalUpdatesAreFencedAndRequireTxHash(t *testing.T) {
 	db := openMoneyEventOutboxPostgresTestDB(t)
-	if err := db.AutoMigrate(&models.SweepJob{}); err != nil {
+	if err := db.AutoMigrate(&models.SweepJob{}, &models.OutboundTransaction{}); err != nil {
 		t.Fatalf("automigrate sweep jobs: %v", err)
 	}
 	ctx := context.Background()
@@ -1023,7 +1029,7 @@ func sweepJobTestTransaction(uniqueHash string, walletID, merchantID uuid.UUID, 
 
 func seedSweepLifecycleJob(t *testing.T, db *gorm.DB, uniqueHash string) (*SweepJobRepo, models.Transaction, *models.SweepJob) {
 	t.Helper()
-	if err := db.AutoMigrate(&models.Transaction{}, &models.SweepJob{}); err != nil {
+	if err := db.AutoMigrate(&models.Transaction{}, &models.SweepJob{}, &models.OutboundTransaction{}); err != nil {
 		t.Fatalf("automigrate sweep lifecycle models: %v", err)
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)

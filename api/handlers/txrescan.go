@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"core/constants"
+	"core/localization"
 	"core/models"
 	"core/services/txrescan"
 
@@ -21,24 +22,25 @@ func HandleDealerTxRescan(deps DealerDeps) fiber.Handler {
 	return func(c fiber.Ctx) error {
 		merchant, ok := requireDealerMerchant(c, deps.MerchantService)
 		if !ok {
-			return redirectWithError(c, "/merchant/login", "Devam etmek için giriş yapmalısın.")
+			return redirectWithError(c, "/merchant/login", portalText(c, "You must sign in to continue."))
 		}
+		loc := portalLocale(c)
 		chainID, txHash, err := parseTxRescanInput(c)
 		if err != nil {
 			return redirectWithError(c, "/merchant/dashboard/rescan", err.Error())
 		}
 		service := txRescanServiceFromDealerDeps(deps)
 		if service == nil {
-			return redirectWithError(c, "/merchant/dashboard/rescan", "Tx rescan servisi hazır değil.")
+			return redirectWithError(c, "/merchant/dashboard/rescan", portalText(c, "Tx rescan service is not ready."))
 		}
 		ctx, cancel := requestTimeout(c, txRescanRequestTimeout)
 		defer cancel()
 		result, err := service.RescanForMerchant(ctx, chainID, txHash, merchant.ID)
 		if err != nil {
-			return redirectWithError(c, "/merchant/dashboard/rescan", txRescanErrorMessage(err))
+			return redirectWithError(c, "/merchant/dashboard/rescan", txRescanErrorMessage(loc, err))
 		}
-		logDealerActivity(c, deps.ActivityLogRepo, &merchant.ID, "dealer", merchant.Email, "tx.rescan", "success", "transaction", txHash, txRescanSuccessMessage(result))
-		return redirectWithSuccess(c, "/merchant/dashboard/rescan", txRescanSuccessMessage(result))
+		logDealerActivity(c, deps.ActivityLogRepo, &merchant.ID, "dealer", merchant.Email, "tx.rescan", "success", "transaction", txHash, txRescanSuccessMessage(localization.EN, result))
+		return redirectWithSuccess(c, "/merchant/dashboard/rescan", txRescanSuccessMessage(loc, result))
 	}
 }
 
@@ -46,24 +48,25 @@ func HandleAdminTxRescan(deps DealerDeps) fiber.Handler {
 	return func(c fiber.Ctx) error {
 		adminEmail, ok := requireAdmin(c)
 		if !ok {
-			return redirectWithError(c, "/admin/login", "Admin girişi gerekli.")
+			return redirectWithError(c, "/admin/login", portalText(c, "Admin sign in required."))
 		}
+		loc := portalLocale(c)
 		chainID, txHash, err := parseTxRescanInput(c)
 		if err != nil {
 			return redirectWithError(c, "/admin/rescan", err.Error())
 		}
 		service := txRescanServiceFromDealerDeps(deps)
 		if service == nil {
-			return redirectWithError(c, "/admin/rescan", "Tx rescan servisi hazır değil.")
+			return redirectWithError(c, "/admin/rescan", portalText(c, "Tx rescan service is not ready."))
 		}
 		ctx, cancel := requestTimeout(c, txRescanRequestTimeout)
 		defer cancel()
 		result, err := service.Rescan(ctx, chainID, txHash)
 		if err != nil {
-			return redirectWithError(c, "/admin/rescan", txRescanErrorMessage(err))
+			return redirectWithError(c, "/admin/rescan", txRescanErrorMessage(loc, err))
 		}
-		logDealerActivity(c, deps.ActivityLogRepo, nil, "admin", adminEmail, "tx.rescan", "success", "transaction", txHash, txRescanSuccessMessage(result))
-		return redirectWithSuccess(c, "/admin/rescan", txRescanSuccessMessage(result))
+		logDealerActivity(c, deps.ActivityLogRepo, nil, "admin", adminEmail, "tx.rescan", "success", "transaction", txHash, txRescanSuccessMessage(localization.EN, result))
+		return redirectWithSuccess(c, "/admin/rescan", txRescanSuccessMessage(loc, result))
 	}
 }
 
@@ -131,7 +134,7 @@ func HandleV1TransactionRescan(deps V1APIDeps) fiber.Handler {
 			if txRescanTimedOut(err) {
 				status = fiber.StatusGatewayTimeout
 			}
-			return v1Err(c, status, txRescanErrorMessage(err))
+			return v1Err(c, status, txRescanErrorMessage(localization.EN, err))
 		}
 		return v1OK(c, fiber.Map{
 			"chain_id":              result.ChainID,
@@ -164,13 +167,17 @@ func txRescanServiceFromV1Deps(deps V1APIDeps) *txrescan.Service {
 }
 
 func parseTxRescanInput(c fiber.Ctx) (constants.ChainID, string, error) {
-	chainID, err := parseTxRescanChain(firstNonEmpty(c.FormValue("chain"), c.FormValue("chain_id")))
+	chainValue := firstNonEmpty(c.FormValue("chain"), c.FormValue("chain_id"))
+	if strings.TrimSpace(chainValue) == "" {
+		return 0, "", errors.New(portalText(c, "You must select a network."))
+	}
+	chainID, err := parseTxRescanChain(chainValue)
 	if err != nil {
-		return 0, "", err
+		return 0, "", errors.New(portalText(c, "Unsupported network: %s", strings.TrimSpace(chainValue)))
 	}
 	txHash := strings.TrimSpace(firstNonEmpty(c.FormValue("tx_hash"), c.FormValue("hash")))
 	if txHash == "" {
-		return 0, "", errors.New("Tx hash zorunlu.")
+		return 0, "", errors.New(portalText(c, "Tx hash is required."))
 	}
 	return chainID, txHash, nil
 }
@@ -178,7 +185,7 @@ func parseTxRescanInput(c fiber.Ctx) (constants.ChainID, string, error) {
 func parseTxRescanChain(value string) (constants.ChainID, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return 0, errors.New("Blockchain seçmelisin.")
+		return 0, errors.New("You must select a network.")
 	}
 	if parsed, err := strconv.ParseInt(value, 10, 64); err == nil {
 		chainID := constants.ChainID(parsed)
@@ -189,44 +196,44 @@ func parseTxRescanChain(value string) (constants.ChainID, error) {
 	if chainID := chainSlugToID(value); constants.IsSupportedChainID(chainID) {
 		return chainID, nil
 	}
-	return 0, fmt.Errorf("Desteklenmeyen blockchain: %s", value)
+	return 0, fmt.Errorf("Unsupported network: %s", value)
 }
 
-func txRescanSuccessMessage(result *txrescan.Result) string {
+func txRescanSuccessMessage(loc localization.Locale, result *txrescan.Result) string {
 	if result == nil {
-		return "Tx yeniden tarandı."
+		return localization.T(loc, "Transaction rescanned.")
 	}
-	parts := []string{fmt.Sprintf("%s tx yeniden tarandı: %d event işlendi", result.Chain, result.Events)}
+	parts := []string{localization.T(loc, "%s transaction rescanned: %d events processed", result.Chain, result.Events)}
 	if result.DepositsMatched > 0 {
-		parts = append(parts, fmt.Sprintf("%d deposit eşleşti", result.DepositsMatched))
+		parts = append(parts, localization.T(loc, "%d deposits matched", result.DepositsMatched))
 	}
 	if result.DepositsUnmatched > 0 {
-		parts = append(parts, fmt.Sprintf("%d tx wallet eşleşmedi; deposit yazılmadı", result.DepositsUnmatched))
+		parts = append(parts, localization.T(loc, "%d transactions did not match a wallet; no deposits written", result.DepositsUnmatched))
 	}
 	if result.TransactionsRecorded > 0 {
-		parts = append(parts, fmt.Sprintf("%d transaction kaydedildi", result.TransactionsRecorded))
+		parts = append(parts, localization.T(loc, "%d transactions recorded", result.TransactionsRecorded))
 	}
 	if result.DepositsFinalized > 0 {
-		parts = append(parts, fmt.Sprintf("%d deposit finalize oldu", result.DepositsFinalized))
+		parts = append(parts, localization.T(loc, "%d deposits finalized", result.DepositsFinalized))
 	}
 	if result.PaymentsSettled > 0 {
-		parts = append(parts, fmt.Sprintf("%d ödeme kapandı", result.PaymentsSettled))
+		parts = append(parts, localization.T(loc, "%d payments settled", result.PaymentsSettled))
 	}
 	return strings.Join(parts, ", ") + "."
 }
 
-func txRescanErrorMessage(err error) string {
+func txRescanErrorMessage(loc localization.Locale, err error) string {
 	switch {
 	case errors.Is(err, txrescan.ErrTransactionNotFound):
-		return "Tx blockchain üzerinde bulunamadı."
+		return localization.T(loc, "Transaction was not found on the blockchain.")
 	case errors.Is(err, txrescan.ErrUnauthorizedTx):
-		return "Bu tx üye işyeri wallet adresleriyle eşleşmiyor."
+		return localization.T(loc, "This transaction does not match the merchant wallet addresses.")
 	case errors.Is(err, txrescan.ErrUnsupportedChain):
-		return "Bu blockchain için rescan desteklenmiyor."
+		return localization.T(loc, "Rescan is not supported for this network.")
 	case txRescanTimedOut(err):
-		return "Rescan zaman aşımına uğradı. İstek gönderildi ancak blockchain RPC yanıtı süresi doldu; tamamlandığı doğrulanamadı. Biraz sonra tekrar dene."
+		return localization.T(loc, "Rescan timed out. The request was sent, but the blockchain RPC response timed out; completion could not be verified. Try again later.")
 	case errors.Is(err, context.Canceled):
-		return "Rescan tamamlanmadan iptal edildi. İşlemin tamamlandığı doğrulanamadı."
+		return localization.T(loc, "Rescan was canceled before completion. The transaction could not be verified as complete.")
 	default:
 		return err.Error()
 	}

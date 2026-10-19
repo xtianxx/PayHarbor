@@ -3,9 +3,16 @@ package routes
 
 import (
 	"context"
+	"errors"
+	"log"
+	"os"
+	"strings"
+	"time"
+
 	"core/api/handlers"
 	"core/api/middleware"
 	"core/api/router"
+	"core/api/viewengine"
 	configurations "core/application/configuration"
 	"core/asset"
 	"core/blockchain"
@@ -20,18 +27,12 @@ import (
 	"core/services/txrescan"
 	webhooksvc "core/services/webhook"
 	x402svc "core/services/x402"
-	"errors"
-	"log"
-	"os"
-	"strings"
-	"time"
 
 	"github.com/bytedance/sonic"
 	fiber "github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/middleware/cors"
 	"github.com/gofiber/fiber/v3/middleware/paginate"
 	staticmw "github.com/gofiber/fiber/v3/middleware/static"
-	"github.com/gofiber/template/html/v3"
 	"gorm.io/gorm"
 
 	_ "core/docs"
@@ -82,14 +83,15 @@ type Router struct {
 }
 
 func NewRouter(db *gorm.DB) *Router {
-
-	var sonicAPI = sonic.Config{
+	sonicAPI := sonic.Config{
 		EscapeHTML: false,
 	}.Froze()
 	devMode := isDevelopmentEnv()
-	engine := html.New("./views", ".html")
-	engine.Reload(devMode)
-	engine.Debug(devMode)
+	// The HTML engine is built by api/viewengine, which serializes Load/Render: the upstream
+	// Fiber html engine copies a shared template outside any lock (html.go:147) and keeps the
+	// {{embed}} layout function in a shared func map (html.go:167), so concurrent renders race.
+	// Only HTML rendering is serialized; every other request path stays fully concurrent.
+	views := viewengine.NewHTML("./views", devMode)
 
 	r := &Router{
 		action: router.NewActionRouter(db),
@@ -99,7 +101,7 @@ func NewRouter(db *gorm.DB) *Router {
 			JSONDecoder:     sonicAPI.Unmarshal, // use sonic for JSON decoding
 			ServerHeader:    constants.PRODUCT_NAME,
 			AppName:         constants.PRODUCT_NAME + " " + constants.PRODUCT_VERSION,
-			Views:           engine,
+			Views:           views,
 			ReadBufferSize:  8192,
 			WriteBufferSize: 8192,
 			CaseSensitive:   true,
@@ -131,6 +133,7 @@ func NewRouter(db *gorm.DB) *Router {
 	))
 
 	r.fiber.Use(middleware.SecurityHeaders())
+	r.fiber.Use(middleware.PortalLocale())
 
 	allowedOrigins := middleware.AllowedCORSOrigins()
 	r.fiber.Use(cors.New(cors.Config{
@@ -471,7 +474,7 @@ func NewRouter(db *gorm.DB) *Router {
 	r.fiber.Get("/api/v1/refund/history", handlers.HandleV1RefundHistory(v1Deps))
 
 	swaggerCfg := swaggo.Config{
-		Title:                "Gateway API",
+		Title:                "PayHarbor API",
 		DeepLinking:          true,
 		PersistAuthorization: true,
 		DocExpansion:         "list",

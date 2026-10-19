@@ -1,0 +1,4 @@
+# Pre-existing permanent skips that are explicitly exempted, with runtime pair.
+# Exactly one entry: the repository's only unconditional skip. Do not add entries
+# without evidence that the skip cannot run in the baseline environment.
+pkg core/repositories Test_Merchant

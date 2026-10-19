@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"core/localization"
+
 	"core/asset"
 	"core/blockchain"
 	"core/constants"
@@ -23,6 +25,14 @@ import (
 	fiberhtml "github.com/gofiber/template/html/v3"
 	"github.com/google/uuid"
 )
+
+// newHandlerTestViews builds a view engine with the portal translation helper registered,
+// which every handler test needs because the in-scope templates call {{ t .Locale … }}.
+func newHandlerTestViews() fiber.Views {
+	engine := fiberhtml.New("../../views", ".html")
+	engine.AddFunc("t", localization.T)
+	return engine
+}
 
 func TestPaginationURLPreservesExistingQuery(t *testing.T) {
 	got := paginationURL("/admin/deposits?from=0xabc&hash=0xdef", 2, 50)
@@ -217,7 +227,7 @@ func TestMerchantRefundsRouteDecisionSourceContract(t *testing.T) {
 	}
 	for _, token := range []string{
 		"merchantDashboardRefundsRedirectURL",
-		"Merchant refund paneli henüz ayrı bir yüzey değil",
+		"The merchant refund panel is not yet a separate surface",
 		"merchantDashboardActivityPaymentsURL + \"?status=paid\"",
 	} {
 		if !strings.Contains(source, token) {
@@ -227,7 +237,7 @@ func TestMerchantRefundsRouteDecisionSourceContract(t *testing.T) {
 }
 
 func TestDealerPublicAuthRoutesRenderLaunchPath(t *testing.T) {
-	app := fiber.New(fiber.Config{Views: fiberhtml.New("../../views", ".html")})
+	app := fiber.New(fiber.Config{Views: newHandlerTestViews()})
 	app.Get("/", HandleDealerHome())
 	app.Get("/merchant/login", HandleDealerLogin())
 	app.Get("/merchant/register", HandleDealerRegister())
@@ -242,7 +252,7 @@ func TestDealerPublicAuthRoutesRenderLaunchPath(t *testing.T) {
 			name: "public home",
 			path: "/",
 			wants: []string{
-				"Gateway Checkout",
+				"PayHarbor Checkout",
 				"Create payment link",
 				`href="/merchant/register"`,
 				`href="/merchant/login"`,
@@ -253,7 +263,7 @@ func TestDealerPublicAuthRoutesRenderLaunchPath(t *testing.T) {
 			name: "merchant login",
 			path: "/merchant/login",
 			wants: []string{
-				"Üye işyeri girişi",
+				"Merchant sign in",
 				`href="/auth/oidc/login"`,
 				`href="/merchant/register"`,
 			},
@@ -262,7 +272,7 @@ func TestDealerPublicAuthRoutesRenderLaunchPath(t *testing.T) {
 			name: "merchant register",
 			path: "/merchant/register",
 			wants: []string{
-				"Üye işyeri kaydı",
+				"Create your merchant account",
 				`action="/merchant/register"`,
 				`href="/merchant/login"`,
 			},
@@ -271,7 +281,7 @@ func TestDealerPublicAuthRoutesRenderLaunchPath(t *testing.T) {
 			name: "merchant onboarding",
 			path: "/merchant/onboarding?merchant_id=mid-1&name=Acme&email=dev@example.com",
 			wants: []string{
-				"Kayıt tamamlandı",
+				"Registration complete",
 				"mid-1",
 				"Acme",
 				"dev@example.com",
@@ -280,6 +290,7 @@ func TestDealerPublicAuthRoutesRenderLaunchPath(t *testing.T) {
 		},
 	} {
 		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		req.AddCookie(&http.Cookie{Name: localization.CookieName, Value: "en"})
 		resp, err := app.Test(req)
 		if err != nil {
 			t.Fatalf("%s request failed: %v", tc.name, err)
@@ -309,10 +320,12 @@ func TestDealerOIDCMissingConfigRendersRecoveryWithoutSecrets(t *testing.T) {
 	t.Setenv("OIDC_REDIRECT_URI", "")
 	t.Setenv("OIDC_CLIENT_SECRET", "super-secret-client-value")
 
-	app := fiber.New(fiber.Config{Views: fiberhtml.New("../../views", ".html")})
+	app := fiber.New(fiber.Config{Views: newHandlerTestViews()})
 	app.Get("/auth/oidc/login", HandleOIDCLogin())
 
-	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/auth/oidc/login", nil))
+	oidcReq := httptest.NewRequest(http.MethodGet, "/auth/oidc/login", nil)
+	oidcReq.AddCookie(&http.Cookie{Name: localization.CookieName, Value: "en"})
+	resp, err := app.Test(oidcReq)
 	if err != nil {
 		t.Fatalf("oidc missing request failed: %v", err)
 	}
@@ -325,7 +338,7 @@ func TestDealerOIDCMissingConfigRendersRecoveryWithoutSecrets(t *testing.T) {
 	}
 	body := string(bodyBytes)
 	for _, want := range []string{
-		"OIDC ayarı eksik",
+		"OIDC settings missing",
 		"OIDC_AUTHORITY/OIDC_AUTH_URL",
 		"OIDC_CLIENT_ID",
 		"OIDC_REDIRECT_URI",
@@ -351,12 +364,12 @@ func TestOIDCEmailVerifiedClaimIsRequired(t *testing.T) {
 		{
 			name:                "verified false",
 			payload:             `{"email":"dealer@example.com","email_verified":false}`,
-			wantValidationError: "OIDC email adresi doğrulanmamış",
+			wantValidationError: "OIDC email address is not verified",
 		},
 		{
 			name:                "verified missing",
 			payload:             `{"email":"dealer@example.com"}`,
-			wantValidationError: "OIDC email doğrulama bilgisi dönmedi",
+			wantValidationError: "OIDC email verification information was not returned",
 		},
 		{
 			name:            "verified malformed",
@@ -442,7 +455,7 @@ func TestDealerDomainSetupCredentialEvidenceContract(t *testing.T) {
 		`class="merchant-section-header merchant-domains-toolbar"`,
 		`class="merchant-products-tabs merchant-domains-tabs"`,
 		`<details class="merchant-domain-disclosure">`,
-		"Kimlik bilgileri ve teknik kanıtlar",
+		"Credentials and technical evidence",
 		"Credential state",
 		"Signing evidence",
 		`message = METHOD + "\n" + path_and_query + "\n" + timestamp + "\n" + raw_body`,
@@ -450,7 +463,7 @@ func TestDealerDomainSetupCredentialEvidenceContract(t *testing.T) {
 		`data-rotate-api-secret="{{.ID}}"`,
 		`data-rotate-confirm="{{.RotateConfirm}}"`,
 		`pattern="[A-Za-z0-9]`,
-		"API secret raw değeri panelde saklanmaz",
+		"raw API secret value is not stored in the panel",
 	} {
 		if !strings.Contains(template, token) {
 			t.Fatalf("domain credential template missing %q", token)
@@ -486,7 +499,7 @@ func TestDealerDomainSetupCredentialEvidenceContract(t *testing.T) {
 		"/rotate-api-secret",
 		"confirm_rotate",
 		"X-Gateway-Rotate-Confirm",
-		"Yeni API secret bir kez gösteriliyor",
+		"New API secret is shown only once",
 	} {
 		if !strings.Contains(js, token) {
 			t.Fatalf("dashboard JS missing rotate token %q", token)
@@ -500,7 +513,9 @@ func TestMerchantDashboardFastNavigationContract(t *testing.T) {
 	for _, token := range []string{
 		`needsLedger := activePanel == "treasury" || activePanel == "withdrawals"`,
 		`if activePanel == "domains" {`,
-		`c.Get("X-Merchant-Navigation")`,
+		`isMerchantFastNavPartial(c)`,
+		`c.Vary(MerchantLocaleHeader)`,
+		`c.Set(MerchantLocaleHeader, string(loc.Canonical()))`,
 		`return c.Render("dealer/dashboard", data)`,
 	} {
 		if !strings.Contains(handler, token) {
@@ -561,7 +576,7 @@ func TestMerchantSettingsUsesAccessibleDragDropNetworkManager(t *testing.T) {
 		"initMerchantChainVisibility",
 		"data-chain-explicit-hidden",
 		"event.dataTransfer.effectAllowed = 'move'",
-		"Testnet politikasıyla kilitli ağ taşınamaz.",
+		"A network locked by the testnet policy cannot be moved.",
 	} {
 		if !strings.Contains(js, token) {
 			t.Fatalf("merchant settings drag/drop JS missing %q", token)
@@ -604,7 +619,7 @@ func TestDealerWebhookSettingsEvidencePackContract(t *testing.T) {
 	for _, token := range []string{
 		"Webhook evidence",
 		"{{.WebhookSigningMode}}",
-		"Last delivery: {{.WebhookLastStatus}}",
+		`{{ t $.Locale "Last delivery: %s · %s · %d attempt · %s" .WebhookLastStatus .WebhookLastEvent .WebhookLastAttempts .WebhookLastAt }}`,
 		`href="{{.WebhookCatalogURL}}"`,
 		"Event catalog",
 		`href="{{.WebhookDocsURL}}"`,
@@ -650,9 +665,9 @@ func TestMerchantActivityDefaultsToBlockchainDepositsFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := string(dashboard)
-	depositTab := strings.Index(html, `data-products-tab="deposits">Blockchain deposits`)
-	paymentTab := strings.Index(html, `data-products-tab="payments">Ödeme aktiviteleri`)
-	auditTab := strings.Index(html, `data-products-tab="audit">Audit logger`)
+	depositTab := strings.Index(html, `data-products-tab="deposits">{{ t $.Locale "Blockchain deposits" }}`)
+	paymentTab := strings.Index(html, `data-products-tab="payments">{{ t $.Locale "Payment activity" }}`)
+	auditTab := strings.Index(html, `data-products-tab="audit">{{ t $.Locale "Audit logger" }}`)
 	if depositTab < 0 || paymentTab < 0 || auditTab < 0 {
 		t.Fatal("activity tabs must include deposits, payments and audit")
 	}
@@ -665,7 +680,7 @@ func TestMerchantActivityDefaultsToBlockchainDepositsFirst(t *testing.T) {
 }
 
 func TestAdminDashboardTemplateParses(t *testing.T) {
-	if _, err := template.ParseFiles("../../views/dealer/admin_dashboard.html"); err != nil {
+	if _, err := template.New("").Funcs(template.FuncMap{"t": localization.T}).ParseFiles("../../views/dealer/admin_dashboard.html"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -776,7 +791,7 @@ func TestAdminMerchantDetailProvidesDomainsWalletsPayments(t *testing.T) {
 		`buildWalletBalanceMap(c.Context(), deps.LedgerRepo, rows, deps.AssetRegistry)`,
 		`normalizeAdminPaymentStatusFilter(c.Query("status"))`,
 		`deps.PaymentRepo.ListByMerchantPage(c.Context(), merchantID, statusFilter, page, limit)`,
-		`dealerPaymentViews(c, rows)`,
+		`dealerPaymentViews(c, portalLocale(c), rows)`,
 		`adminMerchantDetailPaginationBase(merchantID, "payments", statusFilter)`,
 	} {
 		if !strings.Contains(body, token) {
@@ -832,7 +847,7 @@ func TestAdminMerchantDetailProvidesDomainsWalletsPayments(t *testing.T) {
 		`id="admin-merchant-wallets-table" data-admin-table`,
 		`data-admin-table-search="admin-merchant-payments-table"`,
 		`id="admin-merchant-payments-table" data-admin-table`,
-		`{{template "pg" .AdminPagination}}`,
+		`{{template "pg" .}}`,
 	} {
 		if !strings.Contains(html, token) {
 			t.Fatalf("admin merchant detail template missing %q", token)
@@ -845,7 +860,7 @@ func TestAdminReadinessRouteSurfaceUsesV1ReadinessSemantics(t *testing.T) {
 	dashboard := extractHandlerFunctionBody(t, source, "HandleAdminDashboard")
 	for _, token := range []string{
 		`case "readiness":`,
-		"dealerAdminReadinessView(c.Context(), deps)",
+		"dealerAdminReadinessView(loc, c.Context(), deps)",
 		"data.AdminReadinessReady",
 		"data.AdminReadinessRaw",
 	} {
@@ -914,7 +929,7 @@ func TestAdminMetricsRouteSurfaceUsesOperationalMetrics(t *testing.T) {
 	dashboard := extractHandlerFunctionBody(t, source, "HandleAdminDashboard")
 	for _, token := range []string{
 		`case "metrics":`,
-		`dealerAdminMetricsView(c.Context(), deps, strings.TrimSpace(c.Query("tab")))`,
+		`dealerAdminMetricsView(loc, c.Context(), deps, strings.TrimSpace(c.Query("tab")))`,
 		"data.AdminMetricsSummary",
 		"data.AdminMetricsGroups",
 		"data.AdminMetricAlerts",
@@ -968,8 +983,8 @@ func TestAdminMetricsRouteSurfaceUsesOperationalMetrics(t *testing.T) {
 		"Operational metrics",
 		`{{range .AdminMetricTabs}}`,
 		"admin-metric-tabs",
-		"Aksiyon",
-		"Önce bunlara bak",
+		"Action",
+		"Look at these first",
 		"{{.AdminMetricsSummary.CollectionErrors}}",
 		"{{range .AdminMetricAlerts}}",
 		"{{range .AdminMetricsGroups}}",
@@ -989,7 +1004,7 @@ func TestAdminProviderHealthSurfaceUsesSnapshotSourceOfTruth(t *testing.T) {
 	for _, token := range []string{
 		`case "provider-health":`,
 		"deps.ProviderHealthRepo.ListLatest(c.Context())",
-		"dealerProviderHealthViews(rows)",
+		`dealerProviderHealthViews(portalLocale(c), rows)`,
 		`dealerPaginationView(1, limit, int64(len(data.AdminProviderHealth)), "/admin/provider-health")`,
 	} {
 		if !strings.Contains(dashboard, token) {
@@ -1023,7 +1038,7 @@ func TestAdminProviderHealthSurfaceUsesSnapshotSourceOfTruth(t *testing.T) {
 		"{{.StaleIndicator}}",
 		"{{.FallbackPolicy}}",
 		"readiness evidence",
-		"Provider health snapshot yok.",
+		"No provider health snapshot.",
 	} {
 		if !strings.Contains(template, token) {
 			t.Fatalf("admin provider health template missing %q", token)
@@ -1037,7 +1052,8 @@ func TestAdminNetworkOperationalStateSurfaceUsesDatabaseSourceOfTruth(t *testing
 	for _, token := range []string{
 		`case "networks":`,
 		`deps.NetworkOperationalStateRepo.ListAll(c.Context())`,
-		`data.AdminNetworkStates = dealerNetworkOperationalStateViews(rows)`,
+		`loc := portalLocale(c)`,
+		`data.AdminNetworkStates = dealerNetworkOperationalStateViews(loc, rows)`,
 	} {
 		if !strings.Contains(dashboard, token) {
 			t.Fatalf("admin network dashboard missing %q", token)
@@ -1097,7 +1113,7 @@ func TestAdminNetworkOperationalStateSurfaceUsesDatabaseSourceOfTruth(t *testing
 
 func TestDealerNetworkOperationalStateViewsExposeFlowSemantics(t *testing.T) {
 	updatedAt := time.Date(2026, time.July, 13, 9, 30, 0, 0, time.UTC)
-	views := dealerNetworkOperationalStateViews([]models.NetworkOperationalState{
+	views := dealerNetworkOperationalStateViews(localization.EN, []models.NetworkOperationalState{
 		{
 			ChainID:   constants.Ethereum,
 			Mode:      models.NetworkOperationalModeMaintenance,
@@ -1117,7 +1133,7 @@ func TestDealerNetworkOperationalStateViewsExposeFlowSemantics(t *testing.T) {
 	if maintenance.Chain != "Ethereum" || maintenance.ChainID != "1" || maintenance.ChainSlug != "ethereum" {
 		t.Fatalf("maintenance chain identity = %+v", maintenance)
 	}
-	if maintenance.Mode != "maintenance" || maintenance.ModeLabel != "Bakım" || maintenance.ModeClass != "badge-red" {
+	if maintenance.Mode != "maintenance" || maintenance.ModeLabel != "Maintenance" || maintenance.ModeClass != "badge-red" {
 		t.Fatalf("maintenance presentation = %+v", maintenance)
 	}
 	if !maintenance.BlocksDeposits || !maintenance.BlocksWithdrawals {
@@ -1138,7 +1154,7 @@ func TestDealerNetworkOperationalStateViewsExposeFlowSemantics(t *testing.T) {
 
 func TestDealerNetworkOperationalStateViewsExposeMigrationReplayGate(t *testing.T) {
 	reason := "migration 202607180014_canonical_block_money_event_sequence_invariants detected duplicate canonical block history; authoritative scanner replay and money-state reconciliation must complete, and an authorized operator must acknowledge the evidence before explicitly reactivating this network"
-	views := dealerNetworkOperationalStateViews([]models.NetworkOperationalState{{
+	views := dealerNetworkOperationalStateViews(localization.EN, []models.NetworkOperationalState{{
 		ChainID:   constants.Ethereum,
 		Mode:      models.NetworkOperationalModeMaintenance,
 		Reason:    reason,
@@ -1158,7 +1174,7 @@ func TestDealerNetworkOperationalStateViewsExposeMigrationReplayGate(t *testing.
 		t.Fatal(err)
 	}
 	template := string(templateBytes)
-	for _, token := range []string{"{{.Reason}}", "{{.UpdatedBy}}", `value="active"`, "replay ve reconciliation"} {
+	for _, token := range []string{"{{.Reason}}", "{{.UpdatedBy}}", `value="active"`, "replay and reconciliation"} {
 		if !strings.Contains(template, token) {
 			t.Fatalf("admin network surface missing migration-gate evidence token %q", token)
 		}
@@ -1202,7 +1218,7 @@ func TestDealerMetricsParserClassifiesOperationalRisk(t *testing.T) {
 		"# HELP gateway_webhook_delivery_backlog Webhook delivery rows by retry-relevant status.",
 		"# TYPE gateway_webhook_delivery_backlog gauge",
 		`gateway_webhook_delivery_backlog{status="dead_letter"} 2`,
-		"# HELP gateway_build_info Gateway process info.",
+		"# HELP gateway_build_info PayHarbor process info.",
 		"# TYPE gateway_build_info gauge",
 		`gateway_build_info{version="test"} 1`,
 	}, "\n")
@@ -1230,7 +1246,7 @@ func TestDealerMetricsParserClassifiesOperationalRisk(t *testing.T) {
 }
 
 func TestMerchantDashboardTemplateParses(t *testing.T) {
-	if _, err := template.ParseFiles("../../views/dealer/dashboard.html"); err != nil {
+	if _, err := template.New("").Funcs(template.FuncMap{"t": localization.T}).ParseFiles("../../views/dealer/dashboard.html"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1298,7 +1314,7 @@ func TestMerchantTransactionsPanelUsesServerPaginationAndCompactColumns(t *testi
 		"Webhook",
 		"Status",
 		"Action",
-		`{{.TransactionPage.From}}–{{.TransactionPage.To}} / {{.TransactionPage.Total}} tx`,
+		`{{ t $.Locale "%d–%d / %d tx" .TransactionPage.From .TransactionPage.To .TransactionPage.Total }}`,
 		`{{range .TransactionPage.PageURLs}}`,
 		`colspan="7"`,
 	} {
@@ -1335,24 +1351,24 @@ func TestMerchantActivityPanelUsesServerPaginationInsteadOfClientDatatables(t *t
 
 	html := string(dashboard)
 	for _, token := range []string{
-		`{{.AuditPage.From}}–{{.AuditPage.To}} / {{.AuditPage.Total}} audit`,
-		`{{.ActivityPaymentPage.From}}–{{.ActivityPaymentPage.To}} / {{.ActivityPaymentPage.Total}} session`,
-		`{{.ActivityDepositPage.From}}–{{.ActivityDepositPage.To}} / {{.ActivityDepositPage.Total}} deposit`,
+		`{{ t $.Locale "%d–%d / %d audit" .AuditPage.From .AuditPage.To .AuditPage.Total }}`,
+		`{{ t $.Locale "%d–%d / %d session" .ActivityPaymentPage.From .ActivityPaymentPage.To .ActivityPaymentPage.Total }}`,
+		`{{ t $.Locale "%d–%d / %d deposit" .ActivityDepositPage.From .ActivityDepositPage.To .ActivityDepositPage.Total }}`,
 		`{{range .AuditPage.PageURLs}}`,
 		`{{range .ActivityPaymentPage.PageURLs}}`,
 		`{{range .ActivityDepositPage.PageURLs}}`,
-		"Yeni kayıtlar önce",
-		"Yeni depositler önce",
-		"<th>Blockchain</th>",
+		"Newest records first",
+		"Newest deposits first",
+		`<th>{{ t $.Locale "Blockchain" }}</th>`,
 		`colspan="7"`,
 		`?status=underpaid`,
 		`?status=overpaid`,
 		`?status=partial_paid`,
 		"Status copy: awaiting_payment",
 		`<span class="merchant-status-pill {{.StatusClass}}" title="{{.Status}}">{{.StatusLabel}}</span>`,
-		"<th>Webhook</th>",
-		"<th>Status</th>",
-		"<th>Request</th>",
+		`<th>{{ t $.Locale "Webhook" }}</th>`,
+		`<th>{{ t $.Locale "Status" }}</th>`,
+		`<th>{{ t $.Locale "Request" }}</th>`,
 	} {
 		if !strings.Contains(html, token) {
 			t.Fatalf("merchant activity template missing server pagination token %q", token)
@@ -1392,17 +1408,17 @@ func TestPaymentStatusPresentationCoversMerchantEvidenceStates(t *testing.T) {
 		label  string
 		class  string
 	}{
-		{models.PaymentStatusAwaitingPayment, "Ödeme bekliyor", "is-info"},
-		{models.PaymentStatusPending, "Asset bekliyor", "is-warning"},
-		{models.PaymentStatusPaid, "Ödendi", "is-success"},
-		{models.PaymentStatusExpired, "Süre doldu", "is-danger"},
-		{models.PaymentStatusFailed, "Hatalı", "is-danger"},
-		{models.PaymentStatusUnderpaid, "Eksik ödeme", "is-warning"},
-		{models.PaymentStatusOverpaid, "Fazla ödeme", "is-warning"},
-		{models.PaymentStatusPartialPaid, "Kısmi ödeme", "is-warning"},
+		{models.PaymentStatusAwaitingPayment, "Awaiting payment", "is-info"},
+		{models.PaymentStatusPending, "Awaiting asset", "is-warning"},
+		{models.PaymentStatusPaid, "Paid", "is-success"},
+		{models.PaymentStatusExpired, "Expired", "is-danger"},
+		{models.PaymentStatusFailed, "Failed", "is-danger"},
+		{models.PaymentStatusUnderpaid, "Underpaid", "is-warning"},
+		{models.PaymentStatusOverpaid, "Overpaid", "is-warning"},
+		{models.PaymentStatusPartialPaid, "Partially paid", "is-warning"},
 	} {
 		t.Run(tc.status, func(t *testing.T) {
-			label, class := paymentStatusPresentation(tc.status)
+			label, class := paymentStatusPresentation(localization.EN, tc.status)
 			if label != tc.label || class != tc.class {
 				t.Fatalf("paymentStatusPresentation(%q) = (%q, %q), want (%q, %q)", tc.status, label, class, tc.label, tc.class)
 			}
@@ -1420,17 +1436,18 @@ func TestMerchantDashboardPanelsUseSharedHeaders(t *testing.T) {
 		t.Fatal("merchant dashboard panels must use the shared section header/action classes")
 	}
 	for _, title := range []string{
-		"Biriken varlıklar",
-		"Network kasaları",
+		"Accumulated assets",
+		"Network vaults",
 		"Users &amp; Wallets",
-		"Transaction yeniden işleme",
+		"Transaction rescan",
 		"Activity",
 		"Transactions",
 		"Integrations",
-		"Çekim talepleri",
-		"Ağ görünürlüğü",
+		"Withdrawal requests",
+		"Network visibility",
 	} {
-		if !strings.Contains(html, "<h2>"+title+"</h2>") {
+		wrappedTitle := "<h2>{{ t $.Locale \"" + strings.ReplaceAll(title, "&amp;", "&") + "\" }}</h2>"
+		if !strings.Contains(html, wrappedTitle) {
 			t.Fatalf("merchant dashboard missing panel title %q", title)
 		}
 	}
@@ -1466,7 +1483,7 @@ func TestMerchantDashboardOverviewMoneyStateEvidenceContract(t *testing.T) {
 		`{{.PaymentCount}}`,
 		`{{.WalletCount}}`,
 		`{{.DomainCount}}`,
-		"Ledger bakiyesi yok. Domain kurup test checkout veya static deposit oluşturduğunda ledger evidence burada görünür.",
+		"Ledger balance is empty. Ledger evidence appears here once you set up a domain and create a test checkout or static deposit.",
 		`merchant-activity-mono merchant-transaction-hash-link`,
 		`class="merchant-wallet-address"`,
 		`data-copy-value="{{.Hash}}"`,
@@ -1620,11 +1637,11 @@ func TestAdminWebhookReplaySourceContractAuditsDenialsAndUsesReplayRepo(t *testi
 		"EnqueueReplay",
 		"WebhookReplayParams",
 		`confirmReplay != "replay:"+id.String()`,
-		"Webhook replay için confirmation gerekli.",
+		"Confirmation is required for webhook replay.",
 		`logDealerActivity(c, deps.ActivityLogRepo, nil, "admin", adminEmail, "webhook.replay", "failed"`,
-		"Replay reddedildi veya delivery bulunamadı.",
-		"Webhook delivery bulunamadı veya replay yetkin yok.",
-		"Replay zaten aktif; duplicate istek no-op.",
+		"Replay rejected or delivery not found.",
+		"Webhook delivery not found or you do not have replay permission.",
+		"Replay already active; duplicate request is a no-op.",
 	} {
 		if !strings.Contains(body, token) {
 			t.Fatalf("admin webhook replay source missing %q", token)
@@ -1640,7 +1657,7 @@ func TestAdminMoneyEventOutboxRetryRequiresConfirmationAndUsesRepo(t *testing.T)
 		`confirmRetry != "retry:"+id.String()`,
 		"X-Gateway-Retry-Confirm",
 		"money_event_outbox.retry",
-		"yeniden kuyruğa alındı",
+		"Outbox record re-queued.",
 	} {
 		if !strings.Contains(body, token) {
 			t.Fatalf("admin money outbox retry source missing %q", token)
@@ -1661,7 +1678,7 @@ func TestAdminWebhookDiagnosticsSurfaceContract(t *testing.T) {
 		"PayloadPreview:",
 		"LatencyEvidence:",
 		"webhooksvc.SanitizeDeliveryText(row.LastError)",
-		`dealerPreviewText(row.PayloadJSON, "Payload preview unavailable")`,
+		`dealerPreviewText(loc, row.PayloadJSON, "Payload preview unavailable")`,
 	} {
 		if !strings.Contains(view, token) {
 			t.Fatalf("admin webhook diagnostics view missing %q", token)
@@ -1675,13 +1692,13 @@ func TestAdminWebhookDiagnosticsSurfaceContract(t *testing.T) {
 	template := string(templateBytes)
 	for _, token := range []string{
 		`{{.EventType}} / {{.EventVersion}}`,
-		`merchant {{.MerchantID}}`,
-		`domain {{.DomainID}}`,
-		`idempotency {{.IdempotencyKey}}`,
-		`Payload: {{.PayloadPreview}}`,
+		`{{ t $.Locale "merchant %s" .MerchantID }}`,
+		`{{ t $.Locale "domain %s" .DomainID }}`,
+		`{{ t $.Locale "idempotency %s" .IdempotencyKey }}`,
+		`{{ t $.Locale "Payload: %s" .PayloadPreview }}`,
 		`{{.LatencyEvidence}}`,
 		`name="confirm_replay" value="replay:{{.ID}}"`,
-		"Bu filtre için webhook delivery yok.",
+		"No webhook deliveries for this filter.",
 	} {
 		if !strings.Contains(template, token) {
 			t.Fatalf("admin webhook diagnostics template missing %q", token)
@@ -1696,7 +1713,7 @@ func TestAdminReconciliationSurfaceContract(t *testing.T) {
 		`case "reconciliation":`,
 		"data.AdminReconciliationStatusFilter = statusFilter",
 		"deps.ReconciliationRepo.ListPage(c.Context(), page, limit, statusFilter)",
-		"dealerReconciliationJobViews(rows)",
+		`dealerReconciliationJobViews(loc, rows)`,
 		`reconciliationBase := "/admin/reconciliation"`,
 	} {
 		if !strings.Contains(dashboard, token) {
@@ -1730,12 +1747,12 @@ func TestAdminReconciliationSurfaceContract(t *testing.T) {
 		`href="{{.AdminReconciliationURL}}"`,
 		`{{if eq .AdminPanel "reconciliation"}}`,
 		"Reconciliation jobs",
-		"Chain: {{.ChainEvidence}}",
-		"Ledger: {{.LedgerEvidence}}",
-		"Lifecycle: {{.LifecycleEvidence}}",
-		"Webhook: {{.WebhookEvidence}}",
-		"Broadcast: {{.BroadcastEvidence}}",
-		"Bu filtre için reconciliation job yok.",
+		`{{ t $.Locale "Chain: %s" .ChainEvidence }}`,
+		`{{ t $.Locale "Ledger: %s" .LedgerEvidence }}`,
+		`{{ t $.Locale "Lifecycle: %s" .LifecycleEvidence }}`,
+		`{{ t $.Locale "Webhook: %s" .WebhookEvidence }}`,
+		`{{ t $.Locale "Broadcast: %s" .BroadcastEvidence }}`,
+		"No reconciliation jobs for this filter.",
 	} {
 		if !strings.Contains(template, token) {
 			t.Fatalf("admin reconciliation template missing %q", token)
@@ -1853,7 +1870,7 @@ func TestAdminWalletsPanelUsesDataTable(t *testing.T) {
 		`id="admin-wallets-table" data-admin-table`,
 		`data-admin-table-row data-admin-table-key="wallet-{{.ID}}"`,
 		`id="wallet-{{.ID}}-details" data-admin-table-detail-for="wallet-{{.ID}}"`,
-		`{{template "pg" .AdminPagination}}`,
+		`{{template "pg" .}}`,
 	} {
 		if !strings.Contains(html, token) {
 			t.Fatalf("admin wallets template missing data table token %q", token)
@@ -1929,30 +1946,31 @@ func TestAdminDashboardPaginatesStandaloneAdminLists(t *testing.T) {
 	}
 	template := string(templateBytes)
 	for _, required := range []string{
-		`{{.AdminPagination.Total}} session`,
+		`data-admin-table-count="admin-activity-table" data-total="{{.AdminPagination.Total}}"`,
 		`data-admin-table-search="admin-payments-table"`,
 		`data-admin-table-count="admin-payments-table"`,
 		`id="admin-payments-table" data-admin-table`,
 		`admin-payment-detail-row`,
 		`data-sort-value="{{.AmountSort}}"`,
-		`{{.AdminPagination.Total}} asset`,
+		`{{ t $.Locale "%d asset" .AdminPagination.Total }}`,
 		`data-admin-table-count="admin-vault-table"`,
 		`action="/admin/security/outbound-whitelist"`,
 		`data-admin-table-search="admin-activity-table"`,
 		`data-admin-table-count="admin-activity-table" data-total="{{.AdminPagination.Total}}"`,
+		`{{ t $.Locale "%d session" .AdminPagination.Total }}`,
 		`id="admin-activity-table" data-admin-table`,
 		`data-admin-table-row data-admin-table-key="activity-{{.ID}}"`,
 		`name="limit"`,
 		`data-sort-value="{{.CreatedSort}}"`,
 		`class="admin-activity-pager"`,
-		`{{template "pg-always" .AdminPagination}}`,
+		`{{template "pg-always" .}}`,
 		`{{define "pg-always"}}`,
 	} {
 		if !strings.Contains(template, required) {
 			t.Fatalf("admin template missing pagination token %q", required)
 		}
 	}
-	if strings.Count(template, `{{template "pg" .AdminPagination}}`) < 13 {
+	if strings.Count(template, `{{template "pg" .}}`) < 13 {
 		t.Fatal("admin template should render pagination on every list-heavy panel")
 	}
 
@@ -2076,7 +2094,7 @@ func TestAdminRecoverPanelUsesChainFirstPositiveBalancePagination(t *testing.T) 
 	for _, token := range []string{
 		`recoverURL := adminRecoverPaginationBase(recoverAssetValue)`,
 		`recoverWalletHasRecoverableAssetBalance`,
-		`0'dan büyük kullanılabilir veya sweep-locked bakiyeye sahip değil`,
+		`no available or sweep-locked balance greater than 0`,
 	} {
 		if !strings.Contains(recoverSubmitBody, token) {
 			t.Fatalf("admin recover submit missing positive-balance guard token %q", token)
@@ -2113,7 +2131,7 @@ func TestAdminRecoverPanelUsesChainFirstPositiveBalancePagination(t *testing.T) 
 		`{{if not .AdminRecoverAssetFilter}}disabled{{end}}`,
 		`{{range .WithdrawalWallets}}`,
 		`{{if .AdminRecoverAssetFilter}}`,
-		`{{template "pg" .AdminPagination}}`,
+		`{{template "pg" .}}`,
 		`id="recover-live-explorer-link"`,
 		`data-locked-raw="{{.LockedRaw}}"`,
 		`{{if .ExplorerURL}}<a href="{{.ExplorerURL}}"`,
@@ -2156,7 +2174,7 @@ func TestAdminRecoverPanelUsesChainFirstPositiveBalancePagination(t *testing.T) 
 		`function recoverableRawForBalance(balance)`,
 		`function smallerPositiveIntegerString(left, right)`,
 		`maxButton.setAttribute('data-max-raw', balance.lockedRaw)`,
-		`Locked bakiye transfer edilebilir`,
+		`Locked balance can be transferred`,
 		`subtractIntegerStrings(grossMaxRaw, feeRaw)`,
 		`payload.explorer_url`,
 	} {
@@ -2189,10 +2207,20 @@ func TestAdminOutboundTransfersCarrySignerAuditContext(t *testing.T) {
 			t.Fatalf("%s must persist admin actor identity for outbound worker", name)
 		}
 	}
+	// A6-R1: the signer request is built once, from a persisted outbound row, by
+	// outboundTransferParams; the executor must feed it the granted snapshot so a
+	// stale claim can never decide the audit context.
+	paramsBody := extractHandlerFunctionBody(t, string(mainSource), "outboundTransferParams")
 	for _, token := range []string{"ActorID:       outbound.ActorID", "CorrelationID: outbound.CorrelationID", "JobID:         outbound.ID.String()"} {
-		if !strings.Contains(workerBody, token) {
-			t.Fatalf("executeOutboundTransaction must pass signer audit context token %q", token)
+		if !strings.Contains(paramsBody, token) {
+			t.Fatalf("outboundTransferParams must pass signer audit context token %q", token)
 		}
+	}
+	if !strings.Contains(workerBody, "outboundTransferParams(ctx, granted)") {
+		t.Fatal("executeOutboundTransaction must build the signer request from the granted persisted snapshot")
+	}
+	if strings.Contains(workerBody, "outboundTransferParams(ctx, claimed)") {
+		t.Fatal("executeOutboundTransaction must not build the signer request from the claimed snapshot")
 	}
 }
 
@@ -2460,28 +2488,28 @@ func TestAdminOutboundActionsAreIdempotentNoOpsOnRetries(t *testing.T) {
 			name:        "withdrawal approve",
 			function:    "HandleAdminWithdrawalApprove",
 			statusToken: "case models.WithdrawalStatusProcessing, models.WithdrawalStatusFinalized, models.WithdrawalStatusApproved:",
-			message:     "Çekim onayı zaten işlenmiş.",
+			message:     "Withdrawal approval already processed.",
 			mutateToken: "ApproveForOutbound",
 		},
 		{
 			name:        "withdrawal reject",
 			function:    "HandleAdminWithdrawalReject",
 			statusToken: "case models.WithdrawalStatusRejected:",
-			message:     "Çekim talebi zaten reddedilmiş.",
+			message:     "Withdrawal request already rejected.",
 			mutateToken: "MarkRejected",
 		},
 		{
 			name:        "refund approve",
 			function:    "HandleAdminRefundApprove",
 			statusToken: "case models.RefundStatusProcessing, models.RefundStatusSucceeded, models.RefundStatusApproved:",
-			message:     "Refund onayı zaten işlenmiş.",
+			message:     "Refund approval already processed.",
 			mutateToken: "ClaimPendingWithHoldAndSourceForOutbound",
 		},
 		{
 			name:        "refund reject",
 			function:    "HandleAdminRefundReject",
 			statusToken: "case models.RefundStatusRejected:",
-			message:     "Refund talebi zaten reddedilmiş.",
+			message:     "Refund request already rejected.",
 			mutateToken: "MarkRejected",
 		},
 	} {
@@ -2600,7 +2628,7 @@ func TestDealerDonationPaymentLinkCreateAndUpdateContracts(t *testing.T) {
 		`data-required-when-fixed="true"`,
 		`data-product-edit-form`,
 		`data-edit-product="{{.ID}}"`,
-		`Donation / serbest tutar`,
+		`Donation / free amount`,
 	} {
 		if !strings.Contains(dashboardHTML, token) {
 			t.Fatalf("merchant dashboard missing payment link UI token %q", token)
@@ -2671,8 +2699,8 @@ func TestMerchantX402ToggleIsSelectableForFixedLinksAndExplainsDonationState(t *
 		`id="product_x402_enabled" name="x402_enabled" value="true" type="checkbox" aria-describedby="product_x402_help"`,
 		`id="product_edit_x402_enabled" name="x402_enabled" value="true" type="checkbox" aria-describedby="product_edit_x402_help"`,
 		`data-x402-help`,
-		`data-fixed-copy="Network ve asset checkout'ta seçilir; alıcı adresi ve tutar session'dan otomatik alınır."`,
-		`data-donation-copy="x402 yalnızca sabit tutarlı payment link'lerde kullanılabilir."`,
+		`data-fixed-copy="Network and asset are selected at checkout; the receiving address and amount are taken from the session automatically."`,
+		`data-donation-copy="x402 can only be used on fixed-amount payment links."`,
 	} {
 		if !strings.Contains(html, token) {
 			t.Fatalf("merchant x402 toggle missing accessibility token %q", token)
@@ -2724,7 +2752,7 @@ func TestMerchantRescanFormShowsSubmitFeedback(t *testing.T) {
 		`data-rich-select="chain"`,
 		`{{range .RescanChains}}`,
 		`data-logo-url="{{.LogoURL}}"`,
-		`İstek gönderildi; blockchain RPC yanıtı bekleniyor.`,
+		`Request submitted; waiting for blockchain RPC response.`,
 	} {
 		if !strings.Contains(html, token) {
 			t.Fatalf("merchant rescan form missing feedback token %q", token)
@@ -2741,8 +2769,8 @@ func TestMerchantRescanFormShowsSubmitFeedback(t *testing.T) {
 		"renderRichAvatar",
 		"data-logo-url",
 		"form.setAttribute('aria-busy', 'true')",
-		"submit.textContent = 'İşleniyor...'",
-		"RPC yanıtı bekleniyor; işlem devam ediyor.",
+		"submit.textContent = portalT('Processing...')",
+		"Waiting for the RPC response; the transaction is still in progress.",
 	} {
 		if !strings.Contains(js, token) {
 			t.Fatalf("dashboard.js missing rescan feedback token %q", token)
@@ -2762,7 +2790,7 @@ func TestMerchantRescanFormShowsSubmitFeedback(t *testing.T) {
 }
 
 func TestDealerRescanChainOptionsIncludeLogos(t *testing.T) {
-	options := dealerRescanChainOptions()
+	options := dealerRescanChainOptions(localization.EN)
 	if len(options) == 0 {
 		t.Fatal("dealerRescanChainOptions returned no chains")
 	}
@@ -2915,7 +2943,7 @@ func TestAdminTestsCreatePaymentDonationLinksAndSessionDeposits(t *testing.T) {
 		"matchedSession.ExpectedAmountRaw",
 		"positiveTokenAmountRaw(amountRaw)",
 		"adminTestReturnToCheckout(c)",
-		"session başarıya taşındı",
+		"session was moved to success",
 	} {
 		if !strings.Contains(deposit, token) {
 			t.Fatalf("admin test deposit handler missing session token %q", token)
@@ -2925,7 +2953,7 @@ func TestAdminTestsCreatePaymentDonationLinksAndSessionDeposits(t *testing.T) {
 	for _, token := range []string{
 		"deps.PaymentRepo.MarkFailedForTest",
 		"deps.WebhookDeliveryRepo.EnqueuePayment",
-		"checkoutLocalizedURL(session.SessionToken, \"/pay\", adminTestCheckoutLang(c), \"\")",
+		"checkoutURL(session.SessionToken, \"/pay\", \"\")",
 	} {
 		if !strings.Contains(failHandler, token) {
 			t.Fatalf("admin test fail handler missing token %q", token)
@@ -2962,8 +2990,8 @@ func TestAdminTestsCreatePaymentDonationLinksAndSessionDeposits(t *testing.T) {
 		`name="return_to" value="checkout"`,
 		`name="test_outcome" value="success"`,
 		`name="test_outcome" value="fail"`,
-		`Sanal bakiye + success`,
-		`Fail göster`,
+		`Simulated balance + success`,
+		`Show fail`,
 	} {
 		if !strings.Contains(template, token) {
 			t.Fatalf("admin test template missing token %q", token)
@@ -3064,14 +3092,14 @@ func TestAdminSweepUsesJobQueueInsteadOfManualRecoverTransfer(t *testing.T) {
 	html := string(dashboard)
 	for _, token := range []string{
 		`<form method="post" action="{{.AdminSweepURL}}"`,
-		"Finalized depositleri wallet bazlı task kuyruğuna",
+		"queues finalized deposits into per-wallet tasks",
 		"Sweep task queue",
 		"{{.AdminSweepEligibleCount}}",
 		"{{range .AdminSweepJobs}}",
 		"admin-sweep-jobs-table",
-		"<th>Status</th>",
-		"<th>Job / TX</th>",
-		"<th>Retry / zaman</th>",
+		`<th>{{ t $.Locale "Status" }}</th>`,
+		`<th>{{ t $.Locale "Job / TX" }}</th>`,
+		`<th>{{ t $.Locale "Retry / time" }}</th>`,
 		`<tr><td colspan="5"`,
 	} {
 		if !strings.Contains(html, token) {
@@ -3097,7 +3125,7 @@ func TestAdminSweepUsesJobQueueInsteadOfManualRecoverTransfer(t *testing.T) {
 		`id="recover-form"`,
 		`name="wallet_id" id="recover-source-wallet"`,
 		`name="amount_raw"`,
-		`Recover transfer gönder`,
+		`Send recover transfer`,
 	} {
 		if strings.Contains(sweepPanel, forbidden) {
 			t.Fatalf("admin sweep panel must not render manual recover control %q", forbidden)
@@ -3177,27 +3205,35 @@ func (c *adminLiveBalanceTestChain) RPCs() []string             { return nil }
 func (c *adminLiveBalanceTestChain) Create(context.Context) (*blockchain.WalletDetails, error) {
 	return nil, nil
 }
+
 func (c *adminLiveBalanceTestChain) CreateHDWallet(context.Context, int, int) (*blockchain.WalletDetails, error) {
 	return nil, nil
 }
+
 func (c *adminLiveBalanceTestChain) Deposit(context.Context, blockchain.WalletDetails, string, string) (*blockchain.TransactionResult, error) {
 	return nil, nil
 }
+
 func (c *adminLiveBalanceTestChain) Withdraw(context.Context, blockchain.WalletDetails, string, string) (*blockchain.TransactionResult, error) {
 	return nil, nil
 }
+
 func (c *adminLiveBalanceTestChain) WithdrawToken(context.Context, blockchain.WalletDetails, string, string, string) (*blockchain.TransactionResult, error) {
 	return nil, nil
 }
+
 func (c *adminLiveBalanceTestChain) Sweep(context.Context, blockchain.WalletDetails) (*blockchain.TransactionResult, error) {
 	return nil, nil
 }
+
 func (c *adminLiveBalanceTestChain) SweepTo(context.Context, blockchain.WalletDetails, string) (*blockchain.TransactionResult, error) {
 	return nil, nil
 }
+
 func (c *adminLiveBalanceTestChain) SweepERC20To(context.Context, blockchain.WalletDetails, string, string) (*blockchain.TransactionResult, error) {
 	return nil, nil
 }
+
 func (c *adminLiveBalanceTestChain) PrefundGas(context.Context, blockchain.WalletDetails, string) (bool, error) {
 	return false, nil
 }
@@ -3205,6 +3241,7 @@ func (c *adminLiveBalanceTestChain) ValidateAddress(string) bool { return true }
 func (c *adminLiveBalanceTestChain) AddWorker(blockchain.Worker) error {
 	return nil
 }
+
 func (c *adminLiveBalanceTestChain) RemoveWorker(blockchain.Worker) error {
 	return nil
 }
@@ -3262,7 +3299,7 @@ func TestAdminRecoverNetAmountRawRejectsFeeExhaustedAmount(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected fee-exhausted native amount to be rejected")
 	}
-	if !strings.Contains(err.Error(), "network fee sonrası") {
+	if !strings.Contains(err.Error(), "after the network fee") {
 		t.Fatalf("error = %q, want network fee message", err.Error())
 	}
 }
@@ -3440,7 +3477,7 @@ func TestDealerWebhookDeliveryViewsExposeDeadLetterReplayDiagnostics(t *testing.
 		UpdatedAt:          now,
 	}
 
-	views := dealerWebhookDeliveryViews([]models.WebhookDelivery{row})
+	views := dealerWebhookDeliveryViews(localization.EN, []models.WebhookDelivery{row})
 	if len(views) != 1 {
 		t.Fatalf("views = %d, want 1", len(views))
 	}
@@ -3465,11 +3502,11 @@ func TestWebhookDeliveryNextActionFallbacks(t *testing.T) {
 		models.WebhookDeliveryStatusSucceeded:  "",
 	}
 	for status, want := range tests {
-		if got := webhookDeliveryNextAction(models.WebhookDelivery{Status: status}); got != want {
+		if got := webhookDeliveryNextAction(localization.EN, models.WebhookDelivery{Status: status}); got != want {
 			t.Fatalf("status %s next action = %q, want %q", status, got, want)
 		}
 	}
-	if got := webhookDeliveryNextAction(models.WebhookDelivery{Status: models.WebhookDeliveryStatusFailed, OperatorAction: "custom_action"}); got != "custom_action" {
+	if got := webhookDeliveryNextAction(localization.EN, models.WebhookDelivery{Status: models.WebhookDeliveryStatusFailed, OperatorAction: "custom_action"}); got != "custom_action" {
 		t.Fatalf("operator action override = %q, want custom_action", got)
 	}
 }

@@ -1,0 +1,59 @@
+# LOCAL-WEBHOOK-01: dev-only webhook receiver for the ENV-02 offline stack.
+#
+# This file is a compose OVERRIDE, not a standalone stack. Always pass both files
+# (order matters: base first, override second):
+#
+#   docker compose --env-file .env \
+#     -f deploy/compose/offline/docker-compose.yml \
+#     -f deploy/compose/offline/webhook-test.compose.yml up -d webhook-test gateway
+#
+# Why it exists: the offline stack keeps `gateway` and `postgres` on the
+# `internal: true` network with no route off the host, so a receiver bound to the
+# host loopback (http://127.0.0.1:8080/webhook) is unreachable from the gateway
+# container. Instead of opening that network up, this override puts a receiver
+# INSIDE the same internal network; the gateway reaches it as
+# http://webhook-test:8080/webhook.
+#
+# Boundaries:
+#   * No host port is published and no `ports:` key is added anywhere; only
+#     containers on the internal network can reach the receiver.
+#   * No credentials, no .env entry, no volume, no persistence.
+#   * The receiver records a non-sensitive summary (event_type/event_id, byte
+#     length) only, does not verify the HMAC signature, and cannot move funds.
+#   * ALLOW_PRIVATE_WEBHOOK_URLS=true is stated explicitly here so the receiver's
+#     private in-network address passes helpers.ValidateWebhookURL; the base
+#     .env already carries the same value.
+#   * GATEWAY_OFFLINE=true is untouched: no chain listeners, no RPC dialing, no
+#     periodic money/event workers, gateway and postgres stay internal-only.
+
+services:
+  gateway:
+    environment:
+      ALLOW_PRIVATE_WEBHOOK_URLS: "true"
+
+  webhook-test:
+    image: python:3.12-alpine
+    command: ["python", "-u", "/app/webhook_receiver.py"]
+    user: "65534:65534"
+    environment:
+      PORT: "8080"
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ./webhook_receiver.py:/app/webhook_receiver.py:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3).status == 200 else 1)
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - internal

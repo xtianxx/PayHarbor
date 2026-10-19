@@ -2,7 +2,6 @@ package x402
 
 import (
 	"context"
-	"core/constants"
 	"errors"
 	"fmt"
 	"log"
@@ -15,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"core/constants"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/middleware/adaptor"
@@ -313,7 +314,7 @@ func (m *checkoutMiddleware) handlerFor(network x402sdk.Network) (fiber.Handler,
 			},
 			Description: "Pay this checkout with x402",
 			MimeType:    "text/html",
-			ServiceName: "Gateway Checkout",
+			ServiceName: "PayHarbor Checkout",
 		},
 	}
 	facilitator := x402http.NewHTTPFacilitatorClient(&x402http.FacilitatorConfig{
@@ -429,7 +430,7 @@ func parseRoutes(raw, price string, networks []x402sdk.Network, payToByNetwork m
 				"Gateway API resource",
 			),
 			MimeType:    "application/json",
-			ServiceName: firstNonEmpty(strings.TrimSpace(os.Getenv("X402_SERVICE_NAME")), "Gateway"),
+			ServiceName: firstNonEmpty(strings.TrimSpace(os.Getenv("X402_SERVICE_NAME")), "PayHarbor"),
 		}
 	}
 

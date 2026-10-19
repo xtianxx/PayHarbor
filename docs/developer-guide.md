@@ -184,8 +184,42 @@ Production schema changes are not startup-only `AutoMigrate` changes. Keep produ
 1. Edit templates in `views/`.
 2. Edit CSS/JS in `views/assets/`.
 3. Run `npm run build:css` when Tailwind input changes.
-4. Add or update view rendering tests in `views_test.go` or handler tests.
-5. Verify checkout and portal routes in development mode so HTML reload and no-cache static assets are exercised.
+4. Regenerate the compressed sidecar of every asset you changed: `go run ./scripts/brotli-sidecars <asset files...>` (or `go run ./scripts/brotli-sidecars --verify` to audit all of them). `TestFiberBrotliSidecarsMatchSources` fails if a sidecar does not decompress to its source.
+5. Add or update view rendering tests in `views_test.go` or handler tests.
+6. Verify checkout and portal routes in development mode so HTML reload and no-cache static assets are exercised.
+
+### Localization (zh-CN / en)
+
+Every user-visible surface — the public home page, the merchant portal, the admin panel, the
+hosted buyer flow (payment link, checkout, pay page, payment result) and the invoice — renders
+copy through the in-repo `localization` package. There is exactly one mechanism:
+
+- **Locales**: `zh-CN` (default) and `en`. English is the catalog key, so `localization.T` falls
+  back to the source text for a missing entry and the zh-CN catalog (`localization/catalog_zh*.go`)
+  holds the translations. The retired checkout locale `tr` is not a supported value anywhere.
+- **Resolution**: recognized `?lang=` query → `gateway_portal_lang` cookie → the legacy
+  `gateway_lang` cookie (read-only, recognized values only) → `zh-CN`. `Accept-Language` is never
+  consulted, so a default is deterministic. The payment-link landing page additionally treats the
+  merchant's stored link language as the journey default (`localization.BuyerLocaleForProduct`).
+- **Recording a choice**: `api/middleware/portal_locale.go` owns every user-visible path. A GET/HEAD
+  request with a recognized `lang` value writes `gateway_portal_lang`, strips the parameter and
+  redirects on the same path. Internally generated URLs carry no `lang`, so a switch never leaves a
+  stale parameter behind.
+- **Browser copy**: the server renders the per-request JSON bundle
+  (`<script type="application/json" id="portal-i18n-data">`) and `views/assets/portal-i18n.js`
+  exposes it as `portalT(key)`; `views/assets/checkout.js` degrades to the English key when that
+  runtime is missing. Client code must never derive copy from `document.documentElement.lang` or
+  `navigator.language`.
+- **Rules for new copy**: add a `{{ t .Locale "English source text" }}` call (or `portalT("…")` in a
+  browser asset) and add the zh-CN entry to the matching catalog file. Do not hard-code Han text
+  outside the catalog: `TestCatalogCoversEveryRequestedKey` and the CJK rule test fail otherwise.
+
+When you change templates, assets or catalogs, also update the compressed sidecars of changed
+assets and re-run the localization tests:
+
+```bash
+go test -count=1 ./localization ./api/handlers
+```
 
 ## Testing
 
@@ -242,5 +276,5 @@ go vet ./...
 - New partner behavior has API contract and Swagger updates.
 - New worker behavior is cancellable, idempotent, observable, and supervisor-owned.
 - Money-path changes respect module ownership boundaries.
-- CSS changes have rebuilt `views/assets/tailwind.css`.
+- CSS changes have rebuilt `views/assets/tailwind.css` and regenerated the compressed `.fiber.br` sidecars of the changed assets.
 - Tests include the narrow package suite plus broader regression where the change has cross-module impact.

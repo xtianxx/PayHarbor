@@ -1,0 +1,32 @@
+# Build context filters for the offline development image.
+# The Trust Wallet Core *source* must stay in the context (stage 1 builds it);
+# only its previous local build outputs and VCS metadata are excluded.
+
+.git
+.gitignore
+
+# Local secrets and machine state must never enter an image layer.
+.env
+.env.*
+!.env.sample
+
+node_modules/
+tmp/
+.cache/
+_bmad-output/
+
+# Spec Kit / agent scaffolding.
+.specify/feature.json
+.opencode/
+
+# Previous local Wallet Core build outputs (stage 1 always rebuilds them).
+third_party/trustwallet/wallet-core/build
+third_party/trustwallet/wallet-core/rust/target
+third_party/trustwallet/wallet-core/.git
+# NOTE: walletconsole/ and tests/ must stay in the context: wallet-core's CMake
+# defaults TW_BUILD_EXAMPLES and TW_UNIT_TESTS to ON, so both directories are
+# required during configure.
+
+# Local test/coverage output.
+*.test
+coverage.out

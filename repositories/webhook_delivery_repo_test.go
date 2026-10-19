@@ -953,7 +953,9 @@ func TestWebhookDeliveryMarkAttemptRejectsWorkerAfterAcknowledgedSuccess(t *test
 	}
 	repo := NewWebhookDeliveryRepo(db)
 	row := webhookDeliveryTestRow(uuid.New(), uuid.New(), "evt-stale-failure", models.WebhookDeliveryStatusSucceeded, nil)
-	deliveredAt := time.Now().UTC().Add(-time.Minute)
+	// PostgreSQL keeps microsecond resolution; truncating keeps the strict equality
+	// assertion below valid after the database round trip.
+	deliveredAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
 	row.DeliveredAt = &deliveredAt
 	row.Attempts = 1
 	if err := db.Create(&row).Error; err != nil {

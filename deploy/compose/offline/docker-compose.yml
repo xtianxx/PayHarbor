@@ -1,0 +1,103 @@
+# ENV-02 offline development stack.
+#
+# Isolation model:
+#   * `gateway` and `postgres` are attached ONLY to the `internal: true` network, so the
+#     running application and database have no route off the host at all (no public RPC,
+#     no OIDC, no custody signer, no outbound webhook delivery). Measured here with
+#     public-IP and DNS probes from inside both containers.
+#   * On this host (WSL2, Docker 29.6.1) a container attached only to an internal network
+#     did not get a working published mapping, so the loopback ports are provided by
+#     `loopback`, a single inert TCP relay that joins both networks. That behavior is
+#     host-measured, not a general Docker guarantee — other hosts or Docker versions may
+#     differ. The relay itself sits on the non-internal network and therefore can reach the
+#     internet, but it holds no money-path logic and no credentials; the gateway and
+#     database still have no egress of their own.
+#   * Only loopback-published ports exist: PostgreSQL on 127.0.0.1:55432, HTTP on 127.0.0.1:3001.
+#   * `down` keeps the named volume; only `down -v` removes database data.
+#
+# Always invoke with the repository-root .env, for example from the repo root:
+#   docker compose --env-file .env -f deploy/compose/offline/docker-compose.yml up -d
+#   docker compose --env-file .env -f deploy/compose/offline/docker-compose.yml down
+#
+# No chain RPC endpoints, external OIDC, or custody signer credentials are configured.
+# With GATEWAY_OFFLINE=true no listener, sweep, or outbound worker runs at all.
+
+name: gateway-offline
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    # Only PostgreSQL's own settings: application secrets from .env stay out of the
+    # database container entirely.
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (run scripts/generate-offline-env.sh)}
+      POSTGRES_DB: ${POSTGRES_DB:-gateway}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-gateway}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - internal
+
+  gateway:
+    image: gateway-offline:local
+    build:
+      context: ../../..
+      dockerfile: Dockerfile
+    env_file:
+      - path: ../../../.env
+        required: true
+    environment:
+      # Inside the private network the database is reachable by service name.
+      DATABASE_URL: "host=postgres port=5432 user=${POSTGRES_USER:-postgres} password=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set} dbname=${POSTGRES_DB:-gateway} sslmode=disable"
+      APP_ENV: development
+      GATEWAY_OFFLINE: "true"
+      PORT: ":3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    stop_grace_period: 30s
+    networks:
+      - internal
+
+  loopback:
+    # Publishes the loopback ports for the stack. This container is the only member of
+    # the non-internal network; the gateway and database never join it.
+    image: alpine/socat:1.8.1.3
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        socat TCP-LISTEN:3001,fork,reuseaddr TCP:gateway:3001 &
+        socat TCP-LISTEN:55432,fork,reuseaddr TCP:postgres:5432 &
+        wait
+    ports:
+      - "127.0.0.1:55432:55432"
+      - "127.0.0.1:3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      gateway:
+        condition: service_started
+    networks:
+      - internal
+      - loopback
+
+volumes:
+  pgdata:
+    name: gateway-offline-pgdata
+
+networks:
+  internal:
+    name: gateway-offline-internal
+    driver: bridge
+    internal: true
+  loopback:
+    name: gateway-offline-loopback
+    driver: bridge

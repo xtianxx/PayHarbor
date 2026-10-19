@@ -63,7 +63,7 @@ func TestIntegrationGuideMatchesEpic1PartnerContract(t *testing.T) {
 	errorSection := markdownSection(guide, "## Error Handling", "## Security Checklist")
 	requireContains(t, errorSection, `"result": "error"`)
 	requireContains(t, errorSection, `"message"`)
-	requireContains(t, errorSection, "Gateway may replay a failed or dead-lettered webhook with the same event id/type/version")
+	requireContains(t, errorSection, "PayHarbor may replay a failed or dead-lettered webhook with the same event id/type/version")
 	requireNotContains(t, errorSection, `"error":`)
 
 	webhookSection := markdownSection(guide, "## Webhooks", "### Transaction Webhook Payload")

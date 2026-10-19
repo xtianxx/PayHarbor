@@ -1408,7 +1408,7 @@ definitions:
 info:
   contact: {}
   description: Multi-chain merchant payment gateway API.
-  title: Gateway API
+  title: PayHarbor API
   version: "1.0"
 paths:
   /api/v1/common/assets:

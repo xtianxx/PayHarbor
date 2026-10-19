@@ -37,7 +37,7 @@ func (r *ProductRepo) Create(ctx context.Context, product *models.Product) error
 		product.LinkToken = token
 	}
 	if strings.TrimSpace(product.Language) == "" {
-		product.Language = "tr"
+		product.Language = models.DefaultProductLanguage
 	}
 	product.LinkType = models.NormalizePaymentLinkType(product.LinkType)
 	now := time.Now()
@@ -77,7 +77,7 @@ func (r *ProductRepo) Update(ctx context.Context, product *models.Product) error
 		return errors.New("product id is required")
 	}
 	if strings.TrimSpace(product.Language) == "" {
-		product.Language = "tr"
+		product.Language = models.DefaultProductLanguage
 	}
 	product.LinkType = models.NormalizePaymentLinkType(product.LinkType)
 	product.UpdatedAt = time.Now()

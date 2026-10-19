@@ -17,6 +17,7 @@ import (
 	"core/blockchain"
 	"core/constants"
 	"core/helpers"
+	"core/localization"
 	"core/models"
 	"core/repositories"
 	"core/services/networkops"
@@ -1787,13 +1788,33 @@ func HandleV1RefundCreate(deps V1APIDeps) fiber.Handler {
 			IdempotencyKey: idempotencyKey,
 			CorrelationID:  correlationID,
 		}
-		if err := deps.RefundRepo.CreateWithHold(c.Context(), refund, *session, deps.LedgerRepo); err != nil {
+		if err := deps.RefundRepo.CreateWithHoldGuarded(c.Context(), repositories.RefundCreateGuardedRequest{
+			Refund:     refund,
+			MerchantID: domain.MerchantID,
+			DomainID:   domain.ID,
+			PaymentID:  session.ID,
+		}, deps.LedgerRepo); err != nil {
 			failV1CreateIdempotency(c.Context(), deps.IdempotencyRepo, idempotencyRecord, err)
-			status := fiber.StatusInternalServerError
-			if errors.Is(err, repositories.ErrInsufficientAvailableBalance) || errors.Is(err, repositories.ErrLedgerReservationRequired) {
-				status = fiber.StatusBadRequest
+			switch {
+			case errors.Is(err, repositories.ErrRefundLimitExceeded):
+				// The authoritative cap is enforced inside the create transaction;
+				// keep the existing over-limit status and message.
+				return v1Err(c, fiber.StatusBadRequest, "refund amount exceeds refundable payment amount")
+			case errors.Is(err, repositories.ErrRefundAssetBusy):
+				// A7-R1: the per-payment transaction refused to wait for a busy
+				// ledger asset. The idempotency record stays retryable, so the caller
+				// may repeat the same request (same Idempotency-Key) later.
+				return v1Err(c, fiber.StatusServiceUnavailable, "refund asset is busy, retry shortly")
+			case errors.Is(err, repositories.ErrRefundAmountInvalid),
+				errors.Is(err, repositories.ErrRefundPaymentNotRefundable),
+				errors.Is(err, repositories.ErrRefundAssetMismatch),
+				errors.Is(err, repositories.ErrRefundCreateStatusInvalid),
+				errors.Is(err, repositories.ErrInsufficientAvailableBalance),
+				errors.Is(err, repositories.ErrLedgerReservationRequired):
+				return v1Err(c, fiber.StatusBadRequest, "refund creation failed: "+err.Error())
+			default:
+				return v1Err(c, fiber.StatusInternalServerError, "refund creation failed: "+err.Error())
 			}
-			return v1Err(c, status, "refund creation failed: "+err.Error())
 		}
 		response := fiber.Map{"result": "ok", "data": v1RefundResponse(*refund)}
 		if err := completeV1CreateIdempotencyWithCompleteResource(c.Context(), deps.IdempotencyRepo, idempotencyRecord, "refund", refund.ID, response); err != nil {
@@ -1944,42 +1965,29 @@ func stringsToPositiveBigInt(value string) (*big.Int, bool) {
 }
 
 func v1RefundLimitRaw(ctx context.Context, deps V1APIDeps, session *models.PaymentSession) (*big.Int, error) {
-	var limit *big.Int
-	if models.IsDonationLinkType(session.LinkType) {
-		if matched, ok := stringsToPositiveBigInt(session.MatchedAmountRaw); ok {
-			limit = matched
+	facts := repositories.RefundCapFacts{
+		DonationLink:      models.IsDonationLinkType(session.LinkType),
+		ExpectedAmountRaw: session.ExpectedAmountRaw,
+		MatchedAmountRaw:  session.MatchedAmountRaw,
+	}
+	if session.TxUniqueHash != nil {
+		facts.TxUniqueHash = strings.TrimSpace(*session.TxUniqueHash)
+	}
+	if facts.TxUniqueHash != "" && deps.TransactionRepo != nil {
+		txModel, err := deps.TransactionRepo.FindByUniqueHash(ctx, facts.TxUniqueHash)
+		if err == nil {
+			facts.TxResolved = true
+			facts.TxAmountRaw = txModel.Amount
 		}
 	}
-	if limit == nil {
-		expected, ok := stringsToPositiveBigInt(session.ExpectedAmountRaw)
-		if !ok && !models.IsDonationLinkType(session.LinkType) {
-			return nil, fmt.Errorf("payment expected amount is invalid")
-		}
-		if ok {
-			limit = expected
-		}
-	}
-	if deps.TransactionRepo == nil || session.TxUniqueHash == nil || strings.TrimSpace(*session.TxUniqueHash) == "" {
-		if limit == nil {
-			return nil, fmt.Errorf("payment expected amount is invalid")
-		}
-		return new(big.Int).Set(limit), nil
-	}
-	txModel, err := deps.TransactionRepo.FindByUniqueHash(ctx, strings.TrimSpace(*session.TxUniqueHash))
-	if err != nil {
-		if limit == nil {
-			return nil, fmt.Errorf("payment expected amount is invalid")
-		}
-		return new(big.Int).Set(limit), nil
-	}
-	actual, ok := stringsToPositiveBigInt(txModel.Amount)
-	if ok && (limit == nil || actual.Cmp(limit) > 0) {
-		limit = actual
-	}
-	if limit == nil {
+	limit, err := repositories.RefundLimitRaw(facts)
+	if errors.Is(err, repositories.ErrRefundExpectedAmountInvalid) {
 		return nil, fmt.Errorf("payment expected amount is invalid")
 	}
-	return new(big.Int).Set(limit), nil
+	if err != nil {
+		return nil, err
+	}
+	return limit, nil
 }
 
 func ensureV1ReserveWallet(ctx context.Context, deps V1APIDeps, merchantID uuid.UUID) (*models.Wallet, error) {
@@ -2394,7 +2402,7 @@ func v1PaymentLinkProductFromRequest(domain *models.Domain, body types.V1Payment
 		LinkType:       linkType,
 		Amount:         amount,
 		Currency:       currency,
-		Language:       normalizeLanguage(body.Language),
+		Language:       localization.NormalizeLanguage(body.Language).HTMLTag(),
 		SuccessURL:     successURL,
 		CancelURL:      cancelURL,
 		LogoURL:        logoURL,
@@ -2477,7 +2485,7 @@ func v1PaymentLinkResponse(c fiber.Ctx, product models.Product) fiber.Map {
 		"description":      product.Description,
 		"amount":           product.Amount,
 		"currency":         product.Currency,
-		"language":         normalizeLanguage(product.Language),
+		"language":         localization.NormalizeLanguage(product.Language).HTMLTag(),
 		"success_url":      product.SuccessURL,
 		"cancel_url":       product.CancelURL,
 		"logo_url":         product.LogoURL,

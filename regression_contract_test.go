@@ -24,12 +24,22 @@ func TestRegressionHarnessDocumentsTrustWalletCoreModes(t *testing.T) {
 	for _, token := range []string{
 		"submodules: recursive",
 		"git submodule update --init --recursive third_party/trustwallet/wallet-core",
-		"GATEWAY_REGRESSION_MODE=native scripts/regression.sh",
+		// Native is exercised through the baseline container path (Dockerfile
+		// gotest stage + deploy/compose/baseline + scripts/baseline runner/gate);
+		// the host-native scripts/regression.sh invocation was retired with that
+		// change and must not come back.
+		"--target gotest",
+		"deploy/compose/baseline/docker-compose.yml",
+		"scripts/baseline/run-tests.sh --evidence /evidence",
+		"scripts/baseline/verify-test-json.py",
 		"GATEWAY_REGRESSION_MODE=fallback scripts/regression.sh",
 	} {
 		if !strings.Contains(workflow, token) {
 			t.Fatalf(".github/workflows/regression.yml missing %q", token)
 		}
+	}
+	if strings.Contains(workflow, "GATEWAY_REGRESSION_MODE=native scripts/regression.sh") {
+		t.Fatal(".github/workflows/regression.yml must run native through the container baseline, not the host regression script")
 	}
 }
 

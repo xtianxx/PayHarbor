@@ -1,0 +1,99 @@
+# A3 baseline isolation stack (local, non-production).
+#
+# Invariants:
+#   * No top-level `name:` and no explicit `name:` on volumes/networks, so the
+#     project prefix from `-p <project>` fully namespaces every object. Nothing
+#     here can attach to the user's existing `gateway-offline-*` volume/network.
+#   * No `../../../.env` reference and no fallback to the repository root .env.
+#     P0_ENV_FILE / P0_DSN_FILE are required and must be absolute paths to
+#     synthetic (0600) files. Compose interpolation reads `--env-file` (and the
+#     process environment), which is a different mechanism from `service.env_file`.
+#   * gateway and test attach ONLY to the internal network; postgres is internal
+#     too. No ports are published by default.
+#   * Secrets live only in the 0600 env files, never on the command line.
+#
+# Usage (from the repository root):
+#   P0_ENV_FILE="$RUN/env/gateway.env" P0_DSN_FILE="$RUN/env/dsn.env" \
+#   P0_TEST_IMAGE=gateway-baseline:a3-test P0_RUNTIME_IMAGE=gateway-baseline:a3-runtime \
+#   P0_EVIDENCE_DIR="$RUN/evidence" \
+#     docker compose -p p0b-a3-<suffix> --env-file "$RUN/env/gateway.env" \
+#       -f deploy/compose/baseline/docker-compose.yml up -d postgres --wait
+#     docker compose -p p0b-a3-<suffix> --env-file "$RUN/env/gateway.env" \
+#       -f deploy/compose/baseline/docker-compose.yml --profile test \
+#       run --rm test scripts/baseline/run-tests.sh --evidence /evidence
+#
+# Stop with `stop`/`down` only (keeps this project's own volume). Never run
+# `down -v` without a separate, explicit resource-destruction authorization.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    # Deliberately no `env_file`: the database container must not receive the
+    # unrelated synthetic secrets (mnemonic, admin password, portal JWT secret)
+    # that live in the gateway env file. These three values arrive through
+    # explicit `--env-file` interpolation of the calling shell only.
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must come from --env-file interpolation}
+      POSTGRES_DB: ${P0_TEST_DB:-gateway_test}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${P0_TEST_DB:-gateway_test}"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+    networks:
+      - internal
+
+  gateway:
+    # Local non-production smoke target: offline mode, no listeners, no workers.
+    image: ${P0_RUNTIME_IMAGE:?P0_RUNTIME_IMAGE must be set (native build, never fallback)}
+    env_file:
+      - path: ${P0_ENV_FILE:?P0_ENV_FILE must be an absolute path}
+        required: true
+    environment:
+      APP_ENV: development
+      GATEWAY_OFFLINE: "true"
+      PORT: ":3001"
+      DATABASE_URL: "host=postgres port=5432 user=${POSTGRES_USER:-postgres} password=${POSTGRES_PASSWORD:?} dbname=${P0_TEST_DB:-gateway_test} sslmode=disable"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    stop_grace_period: 30s
+    networks:
+      - internal
+
+  test:
+    # Runs the repository's Go suite inside the internal network only.
+    # GOPROXY=off / GOTOOLCHAIN=local: no module or toolchain download at run time.
+    profiles: ["test"]
+    image: ${P0_TEST_IMAGE:?P0_TEST_IMAGE must be set (native test build, never fallback)}
+    env_file:
+      - path: ${P0_ENV_FILE:?P0_ENV_FILE must be an absolute path}
+        required: true
+      - path: ${P0_DSN_FILE:?P0_DSN_FILE must be an absolute path to the synthetic DSN env file}
+        required: true
+    environment:
+      APP_ENV: development
+      GOPROXY: "off"
+      GOTOOLCHAIN: "local"
+      P0_TEST_DB: ${P0_TEST_DB:-gateway_test}
+    working_dir: /src
+    volumes:
+      - ${P0_EVIDENCE_DIR:?P0_EVIDENCE_DIR must be an absolute host directory}:/evidence
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+
+volumes:
+  pgdata:
+
+networks:
+  internal:
+    driver: bridge
+    internal: true

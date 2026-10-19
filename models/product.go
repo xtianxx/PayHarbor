@@ -26,6 +26,12 @@ func IsDonationLinkType(value string) bool {
 	return NormalizePaymentLinkType(value) == PaymentLinkTypeDonation
 }
 
+// DefaultProductLanguage is the stored language of a payment link that never had one
+// recorded: since 004 the hosted buyer flow supports zh-CN and en only, and Simplified
+// Chinese is the default. Historical rows still holding the retired "tr" resolve to this
+// default at display time; they are not rewritten.
+const DefaultProductLanguage = "zh-CN"
+
 type Product struct {
 	ID uuid.UUID `gorm:"type:uuid;default:uuid_generate_v4();primaryKey" json:"id"`
 
@@ -39,7 +45,7 @@ type Product struct {
 	LinkType    string `gorm:"size:32;not null;default:'fixed';index" json:"link_type"`
 	Amount      string `gorm:"size:80;not null" json:"amount"`
 	Currency    string `gorm:"size:20;not null;index" json:"currency"`
-	Language    string `gorm:"size:8;not null;default:'tr'" json:"language"`
+	Language    string `gorm:"size:8;not null;default:'zh-CN'" json:"language"`
 	SuccessURL  string `gorm:"size:500" json:"success_url,omitempty"`
 	CancelURL   string `gorm:"size:500" json:"cancel_url,omitempty"`
 

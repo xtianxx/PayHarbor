@@ -179,7 +179,7 @@ type DeliveryMetadata struct {
 
 func NewNotifier() *Notifier {
 	return &Notifier{
-		client:      &http.Client{Timeout: 15 * time.Second},
+		client:      defaultSafeWebhookHTTPClient(),
 		natsConnect: connectJetStream,
 	}
 }

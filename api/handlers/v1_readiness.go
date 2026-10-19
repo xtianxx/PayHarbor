@@ -15,6 +15,7 @@ import (
 
 	"core/blockchain"
 	"core/constants"
+	"core/helpers"
 	"core/models"
 	"core/services/dbmigrations"
 	"core/services/signer"
@@ -89,6 +90,18 @@ func v1RunReadinessChecks(ctx context.Context, deps V1APIDeps) []types.V1Readine
 	checks := make([]types.V1ReadinessCheck, 0, 64)
 	add := func(name string, ok bool, details string, err error) {
 		v1AppendReadinessCheck(&checks, name, ok, details, err)
+	}
+
+	// Offline development mode deliberately runs without chain listeners and
+	// without periodic money/event workers. Per the offline contract it must
+	// report a not-ready environment instead of leaving readiness green.
+	if helpers.OfflineModeEnabled() {
+		add(
+			"offline.mode",
+			false,
+			"GATEWAY_OFFLINE=true: chain listeners and periodic money/event workers are disabled; this environment is not production ready",
+			errors.New("offline development mode is active"),
+		)
 	}
 
 	if deps.DomainRepo == nil || deps.DomainRepo.DB() == nil {

@@ -173,6 +173,14 @@
   display: none;
 }
 
+/* ZH-04D: the language switches must stay reachable on the public header. The shared
+   nav-hiding rule above would otherwise hide the non-active language link, which made
+   the ZH link unclickable (display:none, 0x0 box) on the live home page. Only the
+   hreflang links are exempted; business nav hiding, order and branding are unchanged. */
+.home-public-body header nav a[hreflang] {
+  display: inline-flex;
+}
+
 .home-public-body header nav a:last-child {
   min-width: 103px;
   justify-content: center;

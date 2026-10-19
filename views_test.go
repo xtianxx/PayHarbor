@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"core/api/handlers"
+	"core/localization"
 	"core/models"
 
 	"github.com/gofiber/template/html/v3"
@@ -118,8 +119,10 @@ func TestTailwindOutputContainsCurrentAdminUtilities(t *testing.T) {
 
 func TestDealerViewsRender(t *testing.T) {
 	engine := html.New("./views", ".html")
+	engine.AddFunc("t", localization.T)
 
 	data := handlers.DealerPageData{
+		Locale:              localization.EN,
 		Title:               "Üye işyeri girişi",
 		Active:              "login",
 		OIDCLoginURL:        "/auth/oidc/login",
@@ -232,7 +235,9 @@ func TestDealerViewsRender(t *testing.T) {
 
 func TestDealerHomeKeepsPublicStylesWithSession(t *testing.T) {
 	engine := html.New("./views", ".html")
+	engine.AddFunc("t", localization.T)
 	data := handlers.DealerPageData{
+		Locale:       localization.EN,
 		Title:        "Crypto payment gateway",
 		Active:       "home",
 		HasSession:   true,
@@ -261,6 +266,7 @@ func TestDealerHomeKeepsPublicStylesWithSession(t *testing.T) {
 
 func TestGatewayViewsRenderCriticalStates(t *testing.T) {
 	engine := html.New("./views", ".html")
+	engine.AddFunc("t", localization.T)
 	session := &models.PaymentSession{
 		SessionToken:      "checkout-token",
 		OrderID:           "ORDER-1001",
@@ -282,8 +288,11 @@ func TestGatewayViewsRenderCriticalStates(t *testing.T) {
 			view: "gateway/checkout",
 			data: map[string]any{
 				"Session":        session,
-				"Lang":           "en",
-				"IsEnglish":      true,
+				"Locale":         localization.EN,
+				"I18NJSON":       localization.JSBundle(localization.EN),
+				"I18NElementID":  localization.BundleScriptElementID,
+				"SwitchURLZH":    "/checkout/checkout-token?lang=zh-CN",
+				"SwitchURLEN":    "/checkout/checkout-token?lang=en",
 				"AssetGroups":    []handlers.CheckoutAssetGroup{{Symbol: "PEPPER", Name: "PEPPER", ChainCount: 1, URL: "/checkout/checkout-token?asset=PEPPER", QuoteAvailable: false}},
 				"SelectedSymbol": "",
 				"Assets":         []handlers.CheckoutAssetOption{},
@@ -296,8 +305,11 @@ func TestGatewayViewsRenderCriticalStates(t *testing.T) {
 			view: "gateway/checkout",
 			data: map[string]any{
 				"Session":        session,
-				"Lang":           "en",
-				"IsEnglish":      true,
+				"Locale":         localization.EN,
+				"I18NJSON":       localization.JSBundle(localization.EN),
+				"I18NElementID":  localization.BundleScriptElementID,
+				"SwitchURLZH":    "/checkout/checkout-token?lang=zh-CN",
+				"SwitchURLEN":    "/checkout/checkout-token?lang=en",
 				"AssetGroups":    []handlers.CheckoutAssetGroup{},
 				"SelectedSymbol": "PEPPER",
 				"Assets":         []handlers.CheckoutAssetOption{},
@@ -310,8 +322,11 @@ func TestGatewayViewsRenderCriticalStates(t *testing.T) {
 			view: "gateway/pay",
 			data: map[string]any{
 				"Session":              session,
-				"Lang":                 "en",
-				"IsEnglish":            true,
+				"Locale":               localization.EN,
+				"I18NJSON":             localization.JSBundle(localization.EN),
+				"I18NElementID":        localization.BundleScriptElementID,
+				"SwitchURLZH":          "/checkout/checkout-token/pay?lang=zh-CN",
+				"SwitchURLEN":          "/checkout/checkout-token/pay?lang=en",
 				"QRCodeURL":            "/checkout/checkout-token/qr.png",
 				"PaymentURI":           "ethereum:0x1111111111111111111111111111111111111111",
 				"ChainName":            "ethereum",
@@ -333,16 +348,18 @@ func TestGatewayViewsRenderCriticalStates(t *testing.T) {
 			name: "payment result page",
 			view: "gateway/payment_result",
 			data: map[string]any{
-				"Title":       "Payment complete",
-				"Message":     "Payment received successfully.",
-				"Status":      "paid",
-				"ResultKind":  "success",
-				"IsEnglish":   true,
-				"CheckoutURL": "/checkout/result-token?lang=en",
-				"LangTRURL":   "/checkout/result-token?lang=tr",
-				"LangENURL":   "/checkout/result-token?lang=en",
+				"Title":         "Payment complete",
+				"Message":       "Payment received successfully.",
+				"Status":        "paid",
+				"ResultKind":    "success",
+				"Locale":        localization.EN,
+				"I18NJSON":      localization.JSBundle(localization.EN),
+				"I18NElementID": localization.BundleScriptElementID,
+				"SwitchURLZH":   "/checkout/result-token?lang=zh-CN",
+				"SwitchURLEN":   "/checkout/result-token?lang=en",
+				"CheckoutURL":   "/checkout/result-token",
 			},
-			expected: []string{"Payment complete", "Payment received successfully.", "Gateway Pay", "crypto-flow-select", "crypto-lang-switch", "crypto-lang-dialog", "/assets/checkout.js"},
+			expected: []string{"Payment complete", "Payment received successfully.", "PayHarbor", "crypto-flow-select", "crypto-lang-switch", "crypto-lang-dialog", "/assets/checkout.js"},
 		},
 	}
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html/template"
 	"log"
 	"math/big"
 	"net/url"
@@ -17,6 +18,7 @@ import (
 	"core/asset"
 	"core/blockchain"
 	"core/constants"
+	"core/localization"
 	"core/models"
 	"core/repositories"
 	"core/services/pricing"
@@ -627,12 +629,12 @@ const (
 )
 
 type checkoutPaymentState struct {
-	Status      string
-	Mode        string
-	TitleEN     string
-	TitleTR     string
-	BodyEN      string
-	BodyTR      string
+	Status string
+	Mode   string
+	// Title and Body are the English source keys of the payer-facing status copy; the
+	// renderer localizes them with the request locale (localization.T).
+	Title       string
+	Body        string
 	Paid        bool
 	Payable     bool
 	Terminal    bool
@@ -658,94 +660,72 @@ func checkoutPayerState(session models.PaymentSession, now time.Time) checkoutPa
 		state.Mode = "paid"
 		state.Paid = true
 		state.Terminal = true
-		state.TitleEN = "Paid"
-		state.TitleTR = "Ödendi"
-		state.BodyEN = "Payment received successfully."
-		state.BodyTR = "Ödeme başarıyla alındı."
+		state.Title = "Paid"
+		state.Body = "Payment received successfully."
 	case models.PaymentStatusExpired:
 		state.Status = checkoutStateExpired
 		state.Mode = "expired"
 		state.Terminal = true
-		state.TitleEN = "Expired"
-		state.TitleTR = "Suresi doldu"
-		state.BodyEN = "This checkout can no longer receive a payment."
-		state.BodyTR = "Bu checkout artik odeme alamaz."
+		state.Title = "Expired"
+		state.Body = "This checkout can no longer receive a payment."
 	case models.PaymentStatusCanceled:
 		state.Status = checkoutStateCanceled
 		state.Mode = "canceled"
 		state.Terminal = true
-		state.TitleEN = "Canceled"
-		state.TitleTR = "Iptal edildi"
-		state.BodyEN = "This checkout was canceled."
-		state.BodyTR = "Bu checkout iptal edildi."
+		state.Title = "Canceled"
+		state.Body = "This checkout was canceled."
 	case models.PaymentStatusFailed:
 		state.Status = checkoutStateFailed
 		state.Mode = "failed"
 		state.Terminal = true
-		state.TitleEN = "Failed"
-		state.TitleTR = "Basarisiz"
-		state.BodyEN = "The payment could not be completed."
-		state.BodyTR = "Odeme tamamlanamadi."
+		state.Title = "Failed"
+		state.Body = "The payment could not be completed."
 	case models.PaymentStatusUnderpaid:
 		state.Status = checkoutStateUnderpaid
 		state.Mode = "underpaid"
 		state.Terminal = true
-		state.TitleEN = "Underpaid"
-		state.TitleTR = "Eksik odeme"
-		state.BodyEN = "The received amount is below the expected amount."
-		state.BodyTR = "Alinan tutar beklenen tutarin altinda."
+		state.Title = "Underpaid"
+		state.Body = "The received amount is below the expected amount."
 	case models.PaymentStatusOverpaid:
 		state.Status = checkoutStateOverpaid
 		state.Mode = "overpaid"
 		state.Terminal = true
-		state.TitleEN = "Overpaid"
-		state.TitleTR = "Fazla odeme"
-		state.BodyEN = "The received amount exceeds the expected amount."
-		state.BodyTR = "Alinan tutar beklenen tutarin uzerinde."
+		state.Title = "Overpaid"
+		state.Body = "The received amount exceeds the expected amount."
 	case models.PaymentStatusPartialPaid:
 		state.Status = checkoutStatePartialPaid
 		state.Mode = "partial_paid"
-		state.TitleEN = "Partial payment received"
-		state.TitleTR = "Kismi odeme alindi"
+		state.Title = "Partial payment received"
 		if session.PaymentOutcome == models.PaymentOutcomePartialAggregating {
 			state.Payable = true
-			state.BodyEN = "The received amount is being aggregated toward this checkout."
-			state.BodyTR = "Alinan tutar bu checkout icin birikimli olarak takip ediliyor."
+			state.Body = "The received amount is being aggregated toward this checkout."
 		} else {
 			state.Terminal = true
-			state.BodyEN = "The received amount partially covers this checkout and needs follow-up."
-			state.BodyTR = "Alinan tutar checkout'u kismen karsiliyor ve takip gerektiriyor."
+			state.Body = "The received amount partially covers this checkout and needs follow-up."
 		}
 	case models.PaymentStatusAwaitingPayment:
 		if strings.TrimSpace(state.TxHash) != "" || session.ConfirmedAt != nil {
 			state.Status = checkoutStateConfirming
 			state.Mode = "confirming"
 			state.Payable = true
-			state.TitleEN = "Payment confirming"
-			state.TitleTR = "Odeme onaylaniyor"
-			state.BodyEN = "A transaction was detected and is waiting for final settlement."
-			state.BodyTR = "Islem algilandi ve final onay bekleniyor."
+			state.Title = "Payment confirming"
+			state.Body = "A transaction was detected and is waiting for final settlement."
 			return state
 		}
 		state.Status = checkoutStateActive
 		state.Mode = "detecting"
 		state.Payable = true
-		state.TitleEN = "Waiting for payment"
-		state.TitleTR = "Odeme bekleniyor"
+		state.Title = "Waiting for payment"
 		if models.IsDonationLinkType(session.LinkType) {
-			state.BodyEN = "Choose the amount in your wallet and send it to the address below."
-			state.BodyTR = "Tutari wallet uygulamanda belirleyip asagidaki adrese gonder."
+			state.Body = "Choose the amount in your wallet and send it to the address below."
 		} else {
-			state.BodyEN = "Send the exact amount to the address below."
-			state.BodyTR = "Tam tutari asagidaki adrese gonder."
+			state.Body = "Send the exact amount to the address below."
 		}
 	default:
 		state.Status = checkoutStatePending
 		state.Mode = "detecting"
-		state.TitleEN = "Waiting for asset selection"
-		state.TitleTR = "Asset secimi bekleniyor"
-		state.BodyEN = "Choose an asset and network to continue."
-		state.BodyTR = "Devam etmek icin asset ve network sec."
+		state.Title = "Waiting for asset selection"
+		state.Body = "Choose an asset and network to continue."
 	}
 	return state
 }
@@ -824,14 +804,13 @@ func HandleCheckout(deps PaymentHandlerDeps) fiber.Handler {
 		if err != nil {
 			return renderPaymentError(c, fiber.StatusNotFound, "Payment session was not found.")
 		}
-		lang := checkoutLanguage(c)
 		checkoutState := checkoutPayerState(*session, time.Now())
 		if checkoutState.Terminal {
 			return renderCheckoutStateResultWithDeps(c, fiber.StatusOK, checkoutState, deps, session)
 		}
 		effectiveStatus := paymentSessionResponseStatus(*session, time.Now())
 		if effectiveStatus == models.PaymentStatusPaid {
-			return c.Redirect().To(checkoutLocalizedURL(session.SessionToken, "/pay", lang, ""))
+			return c.Redirect().To(checkoutURL(session.SessionToken, "/pay", ""))
 		}
 		if effectiveStatus == models.PaymentStatusAwaitingPayment || paymentSessionAggregatePartial(*session) {
 			if session.SelectedChainID != nil {
@@ -843,7 +822,7 @@ func HandleCheckout(deps PaymentHandlerDeps) fiber.Handler {
 					return renderPaymentError(c, fiber.StatusServiceUnavailable, reason)
 				}
 			}
-			return c.Redirect().To(checkoutLocalizedURL(session.SessionToken, "/pay", lang, ""))
+			return c.Redirect().To(checkoutURL(session.SessionToken, "/pay", ""))
 		}
 		if isSessionExpired(session) {
 			if err := markPaymentCanceledOrExpired(c.Context(), deps, session, models.PaymentStatusExpired); err != nil {
@@ -856,14 +835,13 @@ func HandleCheckout(deps PaymentHandlerDeps) fiber.Handler {
 			return renderCheckoutStateResultWithDeps(c, statusCode, checkoutPayerState(*session, time.Now()), deps, session)
 		}
 
+		locale := buyerLocale(c)
 		selectedSymbol := strings.ToUpper(strings.TrimSpace(c.Query("asset")))
 		session = ensureCheckoutPickerWalletAddresses(c.Context(), deps, session)
 		options := checkoutAssetOptions(c.Context(), deps, *session, "")
 		productName, productDesc, productLogo := lookupCheckoutProduct(c.Context(), deps, session.ProductID)
-		return c.Render("gateway/checkout", fiber.Map{
+		return c.Render("gateway/checkout", buyerPageData(c, locale, fiber.Map{
 			"Session":            session,
-			"Lang":               lang,
-			"IsEnglish":          lang == "en",
 			"AssetGroups":        checkoutAssetGroups(c.Context(), deps, *session),
 			"SelectedSymbol":     selectedSymbol,
 			"Assets":             options,
@@ -873,11 +851,9 @@ func HandleCheckout(deps PaymentHandlerDeps) fiber.Handler {
 			"ProductName":        productName,
 			"ProductDescription": productDesc,
 			"ProductLogoURL":     productLogo,
-			"CheckoutURL":        checkoutLocalizedURL(session.SessionToken, "", lang, ""),
-			"SelectURL":          checkoutLocalizedURL(session.SessionToken, "/select", lang, ""),
-			"LangTRURL":          checkoutLocalizedURL(session.SessionToken, "", "tr", selectedSymbol),
-			"LangENURL":          checkoutLocalizedURL(session.SessionToken, "", "en", selectedSymbol),
-		})
+			"CheckoutURL":        checkoutURL(session.SessionToken, "", ""),
+			"SelectURL":          checkoutURL(session.SessionToken, "/select", ""),
+		}))
 	}
 }
 
@@ -910,10 +886,9 @@ func HandleCheckoutSelectAsset(deps PaymentHandlerDeps) fiber.Handler {
 		if err != nil {
 			return renderPaymentError(c, fiber.StatusNotFound, "Payment session was not found.")
 		}
-		lang := checkoutLanguage(c)
 		if paymentSessionTerminal(*session) {
 			if session.Status == models.PaymentStatusPaid {
-				return c.Redirect().To(checkoutLocalizedURL(session.SessionToken, "/return/success", lang, ""))
+				return c.Redirect().To(checkoutURL(session.SessionToken, "/return/success", ""))
 			}
 			return renderCheckoutStateResultWithDeps(c, fiber.StatusOK, checkoutPayerState(*session, time.Now()), deps, session)
 		}
@@ -925,7 +900,7 @@ func HandleCheckoutSelectAsset(deps PaymentHandlerDeps) fiber.Handler {
 				return renderPaymentError(c, fiber.StatusInternalServerError, "Could not expire this checkout session.")
 			}
 			if session.Status == models.PaymentStatusPaid {
-				return c.Redirect().To(checkoutLocalizedURL(session.SessionToken, "/return/success", lang, ""))
+				return c.Redirect().To(checkoutURL(session.SessionToken, "/return/success", ""))
 			}
 			return renderPaymentError(c, fiber.StatusGone, "This payment session has expired.")
 		}
@@ -1014,7 +989,7 @@ func HandleCheckoutSelectAsset(deps PaymentHandlerDeps) fiber.Handler {
 			return renderCheckoutWithError(c, deps, session, "Could not select this asset.")
 		}
 
-		return c.Redirect().To(checkoutLocalizedURL(updatedSession.SessionToken, "/pay", lang, ""))
+		return c.Redirect().To(checkoutURL(updatedSession.SessionToken, "/pay", ""))
 	}
 }
 
@@ -1037,10 +1012,9 @@ func HandleCheckoutChangeAsset(deps PaymentHandlerDeps) fiber.Handler {
 		if err != nil {
 			return renderPaymentError(c, fiber.StatusNotFound, "Payment session was not found.")
 		}
-		lang := checkoutLanguage(c)
 		if paymentSessionTerminal(*session) {
 			if session.Status == models.PaymentStatusPaid {
-				return c.Redirect().To(checkoutLocalizedURL(session.SessionToken, "/return/success", lang, ""))
+				return c.Redirect().To(checkoutURL(session.SessionToken, "/return/success", ""))
 			}
 			return renderCheckoutStateResultWithDeps(c, fiber.StatusOK, checkoutPayerState(*session, time.Now()), deps, session)
 		}
@@ -1052,7 +1026,7 @@ func HandleCheckoutChangeAsset(deps PaymentHandlerDeps) fiber.Handler {
 				return renderPaymentError(c, fiber.StatusInternalServerError, "Could not expire this checkout session.")
 			}
 			if session.Status == models.PaymentStatusPaid {
-				return c.Redirect().To(checkoutLocalizedURL(session.SessionToken, "/return/success", lang, ""))
+				return c.Redirect().To(checkoutURL(session.SessionToken, "/return/success", ""))
 			}
 			return renderPaymentError(c, fiber.StatusGone, "This payment session has expired.")
 		}
@@ -1060,7 +1034,7 @@ func HandleCheckoutChangeAsset(deps PaymentHandlerDeps) fiber.Handler {
 		if err != nil {
 			return renderPaymentError(c, fiber.StatusInternalServerError, "Could not change this checkout asset.")
 		}
-		return c.Redirect().To(checkoutLocalizedURL(updatedSession.SessionToken, "", lang, ""))
+		return c.Redirect().To(checkoutURL(updatedSession.SessionToken, "", ""))
 	}
 }
 
@@ -1080,7 +1054,7 @@ func HandleCheckoutPay(deps PaymentHandlerDeps) fiber.Handler {
 		if err != nil {
 			return renderPaymentError(c, fiber.StatusNotFound, "Payment session was not found.")
 		}
-		lang := checkoutLanguage(c)
+		locale := buyerLocale(c)
 		if isSessionExpired(session) && !paymentSessionTerminal(*session) {
 			if err := markPaymentCanceledOrExpired(c.Context(), deps, session, models.PaymentStatusExpired); err != nil {
 				return renderPaymentError(c, fiber.StatusInternalServerError, "Could not expire this checkout session.")
@@ -1092,7 +1066,7 @@ func HandleCheckoutPay(deps PaymentHandlerDeps) fiber.Handler {
 			return renderCheckoutStateResultWithDeps(c, statusCode, checkoutPayerState(*session, time.Now()), deps, session)
 		}
 		if session.Status == models.PaymentStatusPaid {
-			return c.Redirect().To(checkoutLocalizedURL(session.SessionToken, "/return/success", lang, ""))
+			return c.Redirect().To(checkoutURL(session.SessionToken, "/return/success", ""))
 		}
 		checkoutState := checkoutPayerState(*session, time.Now())
 		if checkoutState.Terminal {
@@ -1108,11 +1082,11 @@ func HandleCheckoutPay(deps PaymentHandlerDeps) fiber.Handler {
 			}
 		}
 		if session.Status == models.PaymentStatusPending {
-			return c.Redirect().To(checkoutLocalizedURL(session.SessionToken, "", lang, ""))
+			return c.Redirect().To(checkoutURL(session.SessionToken, "", ""))
 		}
 
 		if session.SelectedChainID == nil || session.SelectedSymbol == "" || session.DepositAddress == "" {
-			return c.Redirect().To(checkoutLocalizedURL(session.SessionToken, "", lang, ""))
+			return c.Redirect().To(checkoutURL(session.SessionToken, "", ""))
 		}
 		amountDisplay := formatPaymentAmount(session.ExpectedAmountRaw, session.SelectedDecimals, session.SelectedSymbol)
 		if models.IsDonationLinkType(session.LinkType) {
@@ -1121,22 +1095,16 @@ func HandleCheckoutPay(deps PaymentHandlerDeps) fiber.Handler {
 				amountDisplay = formatPaymentAmount(session.MatchedAmountRaw, session.SelectedDecimals, session.SelectedSymbol)
 			}
 		}
-		statusTitle := checkoutState.TitleTR
-		statusBody := checkoutState.BodyTR
-		if lang == "en" {
-			statusTitle = checkoutState.TitleEN
-			statusBody = checkoutState.BodyEN
-		}
+		statusTitle := localization.T(locale, checkoutState.Title)
+		statusBody := localization.T(locale, checkoutState.Body)
 		qrURL := "/checkout/" + session.SessionToken + "/qr.png"
 		productName, productDesc, productLogo := lookupCheckoutProduct(c.Context(), deps, session.ProductID)
 		selectedLogoURL := ""
 		if deps.AssetRegistry != nil {
 			selectedLogoURL = deps.AssetRegistry.LogoURL(session.SelectedSymbol)
 		}
-		return c.Render("gateway/pay", fiber.Map{
+		return c.Render("gateway/pay", buyerPageData(c, locale, fiber.Map{
 			"Session":              session,
-			"Lang":                 lang,
-			"IsEnglish":            lang == "en",
 			"QRCodeURL":            qrURL,
 			"PaymentURI":           paymentURI(*session),
 			"ChainName":            checkoutChainName(*session.SelectedChainID),
@@ -1152,12 +1120,10 @@ func HandleCheckoutPay(deps PaymentHandlerDeps) fiber.Handler {
 			"StatusMode":           checkoutState.Mode,
 			"StatusTitle":          statusTitle,
 			"StatusBody":           statusBody,
-			"CheckoutURL":          checkoutLocalizedURL(session.SessionToken, "", lang, ""),
-			"ChangeAssetURL":       checkoutLocalizedURL(session.SessionToken, "/change", lang, ""),
-			"CancelURL":            checkoutLocalizedURL(session.SessionToken, "/cancel", lang, ""),
-			"LangTRURL":            checkoutLocalizedURL(session.SessionToken, "/pay", "tr", ""),
-			"LangENURL":            checkoutLocalizedURL(session.SessionToken, "/pay", "en", ""),
-		})
+			"CheckoutURL":          checkoutURL(session.SessionToken, "", ""),
+			"ChangeAssetURL":       checkoutURL(session.SessionToken, "/change", ""),
+			"CancelURL":            checkoutURL(session.SessionToken, "/cancel", ""),
+		}))
 	}
 }
 
@@ -1278,7 +1244,6 @@ func HandleCheckoutCancel(deps PaymentHandlerDeps) fiber.Handler {
 		if err != nil {
 			return renderPaymentError(c, fiber.StatusNotFound, "Payment session was not found.")
 		}
-		lang := checkoutLanguage(c)
 		if paymentSessionAggregatePartial(*session) {
 			return renderCheckoutStateResultWithDeps(c, fiber.StatusOK, checkoutPayerState(*session, time.Now()), deps, session)
 		}
@@ -1292,13 +1257,8 @@ func HandleCheckoutCancel(deps PaymentHandlerDeps) fiber.Handler {
 		if session.CancelURL != "" {
 			return c.Redirect().To(session.CancelURL)
 		}
-		title := "Payment canceled"
-		message := "The checkout session was canceled."
-		if lang != "en" {
-			title = "Ödeme iptal edildi"
-			message = "Checkout oturumu iptal edildi."
-		}
-		return c.Render("gateway/payment_result", checkoutPaymentResultViewData(c, lang, deps.AssetRegistry, checkoutResultBrandForSession(c.Context(), deps, session), session, title, message, session.Status, "canceled"))
+		locale := buyerLocale(c)
+		return c.Render("gateway/payment_result", checkoutPaymentResultViewData(c, locale, deps.AssetRegistry, checkoutResultBrandForSession(c.Context(), deps, session), session, "Payment canceled", "The checkout session was canceled.", session.Status, "canceled"))
 	}
 }
 
@@ -1317,20 +1277,14 @@ func HandleCheckoutSuccessReturn(deps PaymentHandlerDeps) fiber.Handler {
 		if err != nil {
 			return renderPaymentError(c, fiber.StatusNotFound, "Payment session was not found.")
 		}
-		lang := checkoutLanguage(c)
 		if session.Status != models.PaymentStatusPaid {
-			return c.Redirect().To(checkoutLocalizedURL(session.SessionToken, "/pay", lang, ""))
+			return c.Redirect().To(checkoutURL(session.SessionToken, "/pay", ""))
 		}
 		if session.SuccessURL != "" {
 			return c.Redirect().To(session.SuccessURL)
 		}
-		title := "Payment complete"
-		message := "Payment received successfully."
-		if lang != "en" {
-			title = "Ödeme tamamlandı"
-			message = "Ödeme başarıyla alındı."
-		}
-		return c.Render("gateway/payment_result", checkoutPaymentResultViewData(c, lang, deps.AssetRegistry, checkoutResultBrandForSession(c.Context(), deps, session), session, title, message, session.Status, "success"))
+		locale := buyerLocale(c)
+		return c.Render("gateway/payment_result", checkoutPaymentResultViewData(c, locale, deps.AssetRegistry, checkoutResultBrandForSession(c.Context(), deps, session), session, "Payment complete", "Payment received successfully.", session.Status, "success"))
 	}
 }
 
@@ -1720,32 +1674,28 @@ func renderCheckoutWithError(c fiber.Ctx, deps PaymentHandlerDeps, session *mode
 
 func renderCheckoutWithErrorStatus(c fiber.Ctx, deps PaymentHandlerDeps, session *models.PaymentSession, status int, message string) error {
 	session = ensureCheckoutPickerWalletAddresses(c.Context(), deps, session)
-	lang := checkoutLanguage(c)
+	locale := buyerLocale(c)
 	selectedSymbol := strings.ToUpper(strings.TrimSpace(c.FormValue("symbol")))
 	productName, productDesc, productLogo := lookupCheckoutProduct(c.Context(), deps, session.ProductID)
-	return c.Status(status).Render("gateway/checkout", fiber.Map{
+	return c.Status(status).Render("gateway/checkout", buyerPageData(c, locale, fiber.Map{
 		"Session":            session,
-		"Lang":               lang,
-		"IsEnglish":          lang == "en",
 		"AssetGroups":        checkoutAssetGroups(c.Context(), deps, *session),
 		"SelectedSymbol":     selectedSymbol,
 		"Assets":             checkoutAssetOptions(c.Context(), deps, *session, selectedSymbol),
 		"IsDonation":         models.IsDonationLinkType(session.LinkType),
 		"ExpiresAtUnix":      checkoutExpiresAtUnix(session),
-		"Error":              message,
+		"Error":              localization.T(locale, message),
 		"ProductName":        productName,
 		"ProductDescription": productDesc,
 		"ProductLogoURL":     productLogo,
-		"CheckoutURL":        checkoutLocalizedURL(session.SessionToken, "", lang, ""),
-		"SelectURL":          checkoutLocalizedURL(session.SessionToken, "/select", lang, ""),
-		"LangTRURL":          checkoutLocalizedURL(session.SessionToken, "", "tr", selectedSymbol),
-		"LangENURL":          checkoutLocalizedURL(session.SessionToken, "", "en", selectedSymbol),
-	})
+		"CheckoutURL":        checkoutURL(session.SessionToken, "", ""),
+		"SelectURL":          checkoutURL(session.SessionToken, "/select", ""),
+	}))
 }
 
 func renderPaymentError(c fiber.Ctx, status int, message string) error {
-	lang := checkoutLanguage(c)
-	return c.Status(status).Render("gateway/payment_result", checkoutPaymentResultViewData(c, lang, nil, checkoutResultBrand{}, nil, "Payment unavailable", message, "error", "error"))
+	locale := buyerLocale(c)
+	return c.Status(status).Render("gateway/payment_result", checkoutPaymentResultViewData(c, locale, nil, checkoutResultBrand{}, nil, "Payment unavailable", message, "error", "error"))
 }
 
 func renderCheckoutStateResult(c fiber.Ctx, status int, state checkoutPaymentState, sessions ...*models.PaymentSession) error {
@@ -1769,13 +1719,7 @@ func renderCheckoutStateResultWithRegistry(c fiber.Ctx, status int, state checko
 }
 
 func renderCheckoutStateResultWithBrand(c fiber.Ctx, status int, state checkoutPaymentState, registry *asset.Registry, brand checkoutResultBrand, session *models.PaymentSession) error {
-	lang := checkoutLanguage(c)
-	title := state.TitleTR
-	body := state.BodyTR
-	if lang == "en" {
-		title = state.TitleEN
-		body = state.BodyEN
-	}
+	locale := buyerLocale(c)
 	resultKind := "error"
 	if state.Status == checkoutStateCanceled {
 		resultKind = "canceled"
@@ -1783,21 +1727,17 @@ func renderCheckoutStateResultWithBrand(c fiber.Ctx, status int, state checkoutP
 	if state.Paid {
 		resultKind = "success"
 	}
-	return c.Status(status).Render("gateway/payment_result", checkoutPaymentResultViewData(c, lang, registry, brand, session, title, body, state.Status, resultKind))
+	return c.Status(status).Render("gateway/payment_result", checkoutPaymentResultViewData(c, locale, registry, brand, session, state.Title, state.Body, state.Status, resultKind))
 }
 
-func checkoutPaymentResultViewData(c fiber.Ctx, lang string, registry *asset.Registry, brand checkoutResultBrand, session *models.PaymentSession, title string, message string, status string, resultKind string) fiber.Map {
-	data := fiber.Map{
-		"Lang":        lang,
-		"Title":       title,
-		"Message":     message,
+func checkoutPaymentResultViewData(c fiber.Ctx, locale localization.Locale, registry *asset.Registry, brand checkoutResultBrand, session *models.PaymentSession, title string, message string, status string, resultKind string) fiber.Map {
+	data := buyerPageData(c, locale, fiber.Map{
+		"Title":       localization.T(locale, title),
+		"Message":     localization.T(locale, message),
 		"Status":      status,
-		"StatusLabel": checkoutResultStatusLabel(status, resultKind, lang),
+		"StatusLabel": checkoutResultStatusLabel(locale, status, resultKind),
 		"ResultKind":  resultKind,
-		"IsEnglish":   lang == "en",
-		"LangTRURL":   checkoutCurrentPathLanguageURL(c, "tr"),
-		"LangENURL":   checkoutCurrentPathLanguageURL(c, "en"),
-	}
+	})
 	if session == nil {
 		data["CheckoutURL"] = "/"
 		return data
@@ -1809,8 +1749,8 @@ func checkoutPaymentResultViewData(c fiber.Ctx, lang string, registry *asset.Reg
 		data["ProductLogoURL"] = brand.LogoURL
 	}
 	data["Session"] = session
-	data["CheckoutURL"] = checkoutLocalizedURL(session.SessionToken, "", lang, "")
-	data["ReceiptRefs"] = checkoutReceiptRefs(session)
+	data["CheckoutURL"] = checkoutURL(session.SessionToken, "", "")
+	data["ReceiptRefs"] = checkoutReceiptRefs(session, locale)
 	data["OrderID"] = strings.TrimSpace(session.OrderID)
 	data["Amount"] = strings.TrimSpace(session.Amount)
 	data["Currency"] = strings.TrimSpace(session.Currency)
@@ -1828,61 +1768,30 @@ func checkoutPaymentResultViewData(c fiber.Ctx, lang string, registry *asset.Reg
 	return data
 }
 
-func checkoutResultStatusLabel(status string, resultKind string, lang string) string {
-	isEnglish := normalizeLanguage(lang) == "en"
+func checkoutResultStatusLabel(locale localization.Locale, status string, resultKind string) string {
 	switch strings.TrimSpace(status) {
 	case models.PaymentStatusPaid:
-		if isEnglish {
-			return "Completed"
-		}
-		return "Tamamlandı"
+		return localization.T(locale, "Completed")
 	case models.PaymentStatusCanceled:
-		if isEnglish {
-			return "Canceled"
-		}
-		return "İptal edildi"
+		return localization.T(locale, "Canceled")
 	case models.PaymentStatusExpired:
-		if isEnglish {
-			return "Expired"
-		}
-		return "Süresi doldu"
+		return localization.T(locale, "Expired")
 	case models.PaymentStatusFailed:
-		if isEnglish {
-			return "Failed"
-		}
-		return "Başarısız"
+		return localization.T(locale, "Failed")
 	case models.PaymentStatusUnderpaid:
-		if isEnglish {
-			return "Underpaid"
-		}
-		return "Eksik ödeme"
+		return localization.T(locale, "Underpaid")
 	case models.PaymentStatusOverpaid:
-		if isEnglish {
-			return "Overpaid"
-		}
-		return "Fazla ödeme"
+		return localization.T(locale, "Overpaid")
 	case models.PaymentStatusPartialPaid:
-		if isEnglish {
-			return "Partial payment"
-		}
-		return "Kısmi ödeme"
+		return localization.T(locale, "Partial payment")
 	}
 	switch strings.TrimSpace(resultKind) {
 	case "success":
-		if isEnglish {
-			return "Completed"
-		}
-		return "Tamamlandı"
+		return localization.T(locale, "Completed")
 	case "canceled":
-		if isEnglish {
-			return "Canceled"
-		}
-		return "İptal edildi"
+		return localization.T(locale, "Canceled")
 	default:
-		if isEnglish {
-			return "Action required"
-		}
-		return "İşlem tamamlanamadı"
+		return localization.T(locale, "Action required")
 	}
 }
 
@@ -1945,59 +1854,75 @@ func checkoutResultAssetLogoURL(registry *asset.Registry, symbol string) string 
 	return asset.CoinLogoURLFromSlug(symbol)
 }
 
-func checkoutCurrentPathLanguageURL(c fiber.Ctx, lang string) string {
-	path := strings.TrimSpace(c.Path())
-	if path == "" {
-		path = "/"
-	}
-	values := url.Values{}
-	values.Set("lang", normalizeLanguage(lang))
-	return path + "?" + values.Encode()
+// buyerLocale resolves the locale of a buyer-flow request: a recognized "lang" query
+// wins, then the language cookie the browser already carries, then the retired checkout
+// cookie (recognized values only), then the zh-CN default. Nothing is written here; only
+// the locale middleware records an explicit choice.
+func buyerLocale(c fiber.Ctx) localization.Locale {
+	return localization.BuyerLocale(
+		c.Query("lang"),
+		c.Cookies(localization.CookieName),
+		c.Cookies(localization.LegacyCheckoutCookieName),
+	)
 }
 
-func checkoutReceiptRefs(session *models.PaymentSession) []fiber.Map {
+// checkoutSwitchURLs builds the language-switch links for the current buyer path. The
+// links carry ?lang=… so the locale middleware records the choice in the cookie and
+// strips the parameter again, while every other query parameter is preserved.
+func checkoutSwitchURLs(c fiber.Ctx) (string, string) {
+	parsed, err := url.Parse(strings.TrimSpace(c.OriginalURL()))
+	if err != nil {
+		return "", ""
+	}
+	query, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil {
+		query = url.Values{}
+	}
+	zh, _ := localization.SwitchURL(parsed.Path, query, localization.ZHCN)
+	en, _ := localization.SwitchURL(parsed.Path, query, localization.EN)
+	return zh, en
+}
+
+// buyerPageData attaches the per-request locale values every buyer template needs to a
+// page-data map: the locale itself, the browser bundle and the two language-switch links.
+// The map is mutated in place and returned so render sites stay a single expression.
+func buyerPageData(c fiber.Ctx, locale localization.Locale, data fiber.Map) fiber.Map {
+	zh, en := checkoutSwitchURLs(c)
+	data["Locale"] = locale
+	data["I18NJSON"] = localization.JSBundle(locale)
+	data["I18NElementID"] = localization.BundleScriptElementID
+	data["SwitchURLZH"] = zh
+	data["SwitchURLEN"] = en
+	return data
+}
+
+func checkoutReceiptRefs(session *models.PaymentSession, locale localization.Locale) []fiber.Map {
 	if session == nil {
 		return nil
 	}
 	refs := []fiber.Map{
-		{"ID": "receiptPaymentID", "Label": "Payment ID", "Value": session.ID.String()},
-		{"ID": "receiptSessionToken", "Label": "Track ID", "Value": strings.TrimSpace(session.SessionToken)},
+		{"ID": "receiptPaymentID", "Label": localization.T(locale, "Payment ID"), "Value": session.ID.String()},
+		{"ID": "receiptSessionToken", "Label": localization.T(locale, "Track ID"), "Value": strings.TrimSpace(session.SessionToken)},
 	}
 	if orderID := strings.TrimSpace(session.OrderID); orderID != "" {
-		refs = append(refs, fiber.Map{"ID": "receiptOrderID", "Label": "Order ID", "Value": orderID})
+		refs = append(refs, fiber.Map{"ID": "receiptOrderID", "Label": localization.T(locale, "Order ID"), "Value": orderID})
 	}
 	if session.TxHash != nil {
 		if txHash := strings.TrimSpace(*session.TxHash); txHash != "" {
-			refs = append(refs, fiber.Map{"ID": "receiptTxHash", "Label": "Transaction", "Value": txHash})
+			refs = append(refs, fiber.Map{"ID": "receiptTxHash", "Label": localization.T(locale, "Transaction"), "Value": txHash})
 		}
 	}
 	return refs
 }
 
-func checkoutLanguage(c fiber.Ctx) string {
-	lang := normalizeLanguage(c.Query("lang"))
-	if strings.TrimSpace(c.Query("lang")) == "" {
-		lang = normalizeLanguage(c.Cookies("gateway_lang"))
-	}
-	c.Cookie(&fiber.Cookie{
-		Name:     "gateway_lang",
-		Value:    lang,
-		Path:     "/",
-		HTTPOnly: true,
-		SameSite: "Lax",
-		MaxAge:   60 * 60 * 24 * 365,
-	})
-	return lang
-}
-
-func checkoutLocalizedURL(sessionToken string, suffix string, lang string, selectedSymbol string) string {
+// checkoutURL builds a buyer-flow path. The locale is deliberately absent: it lives in
+// the language cookie, so internal redirects never bounce through the locale middleware
+// and a switched language never leaves a stale parameter behind.
+func checkoutURL(sessionToken string, suffix string, selectedSymbol string) string {
 	path := "/checkout/" + strings.TrimSpace(sessionToken) + suffix
 	values := url.Values{}
 	if selectedSymbol = strings.ToUpper(strings.TrimSpace(selectedSymbol)); selectedSymbol != "" && suffix == "" {
 		values.Set("asset", selectedSymbol)
-	}
-	if lang = normalizeLanguage(lang); lang != "" {
-		values.Set("lang", lang)
 	}
 	encoded := values.Encode()
 	if encoded == "" {
@@ -2195,15 +2120,21 @@ type InvoicePageData struct {
 	CreatedAt            string
 	PaidAt               string
 	CheckoutURL          string
+	Locale               localization.Locale
+	I18NJSON             template.JS
+	I18NElementID        string
+	SwitchURLZH          string
+	SwitchURLEN          string
 }
 
 // HandlePaymentInvoice renders a print-friendly invoice/receipt for a payment session.
 func HandlePaymentInvoice(deps PaymentHandlerDeps) fiber.Handler {
 	return func(c fiber.Ctx) error {
+		locale := portalLocale(c)
 		token := c.Params("token")
 		session, err := deps.PaymentRepo.FindByToken(c.Context(), token)
 		if err != nil {
-			return c.Status(fiber.StatusNotFound).SendString("Ödeme bulunamadı")
+			return c.Status(fiber.StatusNotFound).SendString(localization.T(locale, "Payment not found"))
 		}
 		if !paymentSessionTerminal(*session) && session.SelectedChainID != nil {
 			available, reason, availabilityErr := paymentNetworkDepositAvailability(c.Context(), deps.NetworkOperationalStateRepo, *session.SelectedChainID)
@@ -2218,11 +2149,11 @@ func HandlePaymentInvoice(deps PaymentHandlerDeps) fiber.Handler {
 		isPaid := session.Status == models.PaymentStatusPaid
 		productName, productDescription, productLogoURL := lookupCheckoutProduct(c.Context(), deps, session.ProductID)
 		if productName == "" {
-			productName = "Gateway Pay"
+			productName = "PayHarbor"
 		}
 		statusClass := invoiceStatusClass(session.Status)
 		data := InvoicePageData{
-			Title:              "Fatura #" + session.OrderID,
+			Title:              localization.T(locale, "Invoice #%s", session.OrderID),
 			OrderID:            session.OrderID,
 			DomainURL:          session.Domain.DomainURL,
 			ProductName:        productName,
@@ -2232,7 +2163,7 @@ func HandlePaymentInvoice(deps PaymentHandlerDeps) fiber.Handler {
 			Currency:           strings.ToUpper(strings.TrimSpace(session.Currency)),
 			AmountDisplay:      invoiceAmountDisplay(session),
 			Status:             session.Status,
-			StatusLabel:        invoiceStatusLabel(session.Status),
+			StatusLabel:        invoiceStatusLabel(locale, session.Status),
 			StatusClass:        statusClass,
 			IsPaid:             isPaid,
 			Symbol:             strings.ToUpper(strings.TrimSpace(session.SelectedSymbol)),
@@ -2242,6 +2173,10 @@ func HandlePaymentInvoice(deps PaymentHandlerDeps) fiber.Handler {
 		if data.AmountDisplay == " " {
 			data.AmountDisplay = ""
 		}
+		data.Locale = locale
+		data.I18NJSON = localization.JSBundle(locale)
+		data.I18NElementID = localization.BundleScriptElementID
+		data.SwitchURLZH, data.SwitchURLEN = invoiceSwitchURLs(c)
 		if data.Symbol != "" {
 			data.SelectedAssetLogoURL = checkoutResultAssetLogoURL(deps.AssetRegistry, data.Symbol)
 		}
@@ -2259,25 +2194,41 @@ func HandlePaymentInvoice(deps PaymentHandlerDeps) fiber.Handler {
 	}
 }
 
-func invoiceStatusLabel(status string) string {
+func invoiceStatusLabel(locale localization.Locale, status string) string {
 	switch strings.TrimSpace(status) {
 	case models.PaymentStatusPaid:
-		return "Tamamlandı"
+		return localization.T(locale, "Completed")
 	case models.PaymentStatusCanceled:
-		return "İptal edildi"
+		return localization.T(locale, "Canceled")
 	case models.PaymentStatusExpired:
-		return "Süresi doldu"
+		return localization.T(locale, "Expired")
 	case models.PaymentStatusFailed:
-		return "Başarısız"
+		return localization.T(locale, "Failed")
 	case models.PaymentStatusUnderpaid:
-		return "Eksik ödeme"
+		return localization.T(locale, "Underpaid")
 	case models.PaymentStatusOverpaid:
-		return "Fazla ödeme"
+		return localization.T(locale, "Overpaid")
 	case models.PaymentStatusPartialPaid:
-		return "Kısmi ödeme"
+		return localization.T(locale, "Partial payment")
 	default:
-		return "Ödeme bekleniyor"
+		return localization.T(locale, "Waiting for payment")
 	}
+}
+
+// invoiceSwitchURLs builds the same-origin language links for the invoice page. On any
+// unsafe or unparseable request URL both links are empty and the template renders none.
+func invoiceSwitchURLs(c fiber.Ctx) (string, string) {
+	parsed, err := url.Parse(strings.TrimSpace(c.OriginalURL()))
+	if err != nil {
+		return "", ""
+	}
+	query, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil {
+		query = url.Values{}
+	}
+	zh, _ := localization.SwitchURL(parsed.Path, query, localization.ZHCN)
+	en, _ := localization.SwitchURL(parsed.Path, query, localization.EN)
+	return zh, en
 }
 
 func invoiceAmountDisplay(session *models.PaymentSession) string {

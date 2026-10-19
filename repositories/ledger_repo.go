@@ -2,7 +2,6 @@ package repositories
 
 import (
 	"context"
-	"core/constants"
 	"errors"
 	"fmt"
 	"math/big"
@@ -10,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"core/constants"
 
 	"core/models"
 
@@ -22,8 +23,10 @@ type LedgerRepo struct {
 	db *gorm.DB
 }
 
-var ErrInsufficientAvailableBalance = errors.New("insufficient available balance")
-var ErrLedgerReservationRequired = errors.New("ledger reservation is required before outbound transfer")
+var (
+	ErrInsufficientAvailableBalance = errors.New("insufficient available balance")
+	ErrLedgerReservationRequired    = errors.New("ledger reservation is required before outbound transfer")
+)
 
 func NewLedgerRepo(db *gorm.DB) *LedgerRepo {
 	return &LedgerRepo{db: db}
@@ -1491,6 +1494,20 @@ func ledgerEntryHasSweepOperationalLineage(ctx context.Context, tx *gorm.DB, ent
 func (r *LedgerRepo) lockLedgerAsset(ctx context.Context, tx *gorm.DB, merchantID uuid.UUID, domainID *uuid.UUID, chainID constants.ChainID, token *string) error {
 	lockKey := ledgerAssetLockMapKey(merchantID, domainID, chainID, token)
 	return tx.WithContext(ctx).Exec("SELECT pg_advisory_xact_lock(hashtext(?))", lockKey).Error
+}
+
+// tryLockLedgerAsset is the non-blocking form of lockLedgerAsset over the same
+// lock key. It exists for callers that already hold a row lock the deposit/reorg
+// path may want next: they must never queue behind the asset lock there, because
+// the deposit/reorg order is asset-lock-then-payment-row and waiting would close a
+// cycle. A false result means someone else holds the asset lock right now.
+func (r *LedgerRepo) tryLockLedgerAsset(ctx context.Context, tx *gorm.DB, merchantID uuid.UUID, domainID *uuid.UUID, chainID constants.ChainID, token *string) (bool, error) {
+	lockKey := ledgerAssetLockMapKey(merchantID, domainID, chainID, token)
+	var acquired bool
+	if err := tx.WithContext(ctx).Raw("SELECT pg_try_advisory_xact_lock(hashtext(?))", lockKey).Row().Scan(&acquired); err != nil {
+		return false, err
+	}
+	return acquired, nil
 }
 
 func (r *LedgerRepo) ensureAvailableBalance(ctx context.Context, tx *gorm.DB, merchantID uuid.UUID, domainID *uuid.UUID, chainID constants.ChainID, token *string, amountRaw string) error {

@@ -37,7 +37,6 @@ func randomHex(n int) (string, error) {
 }
 
 func GenerateAPIKey(env string) (keyID string, apiKey string, err error) {
-
 	id, err := randomHex(6)
 	if err != nil {
 		return "", "", err
@@ -103,7 +102,6 @@ func GenerateSignature(secret string, timestamp string, body []byte) string {
 }
 
 func VerifySignature(secret string, timestamp string, body []byte, received string) bool {
-
 	expected := GenerateSignature(secret, timestamp, body)
 
 	return subtle.ConstantTimeCompare(
@@ -130,7 +128,6 @@ func VerifyRequestSignature(secret string, method string, path string, timestamp
 }
 
 func ValidateTimestamp(ts string) error {
-
 	t, err := strconv.ParseInt(ts, 10, 64)
 	if err != nil {
 		return errors.New("invalid timestamp")
@@ -146,7 +143,6 @@ func ValidateTimestamp(ts string) error {
 }
 
 func ExtractKeyID(apiKey string) (string, error) {
-
 	parts := strings.Split(apiKey, "_")
 	if len(parts) < 4 {
 		return "", errors.New("invalid api key format")
@@ -287,6 +283,68 @@ func allowPrivateWebhookURLs() bool {
 	return appEnv == "development" || appEnv == "dev" || appEnv == "local" || appEnv == "test"
 }
 
+// WebhookDestinationAllowed is the single webhook destination-IP policy, shared by
+// URL-time validation and the webhook transport's per-connection validation so the
+// two checks can never drift. Non-production keeps the existing private/loopback
+// receiver exception (development/local/test, or an explicit
+// ALLOW_PRIVATE_WEBHOOK_URLS=true); production never allows a non-public
+// destination, even with that flag set. Destinations that are never valid — the
+// unspecified address, multicast, the IPv4 broadcast address and IPv6 transition
+// prefixes that tunnel arbitrary IPv4 targets — stay blocked everywhere.
+func WebhookDestinationAllowed(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	// IPv4-mapped IPv6 (::ffff:10.0.0.1) must be classified as the IPv4 address it
+	// actually is.
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4
+	}
+	if ip.IsUnspecified() || ip.IsMulticast() || ip.Equal(net.IPv4bcast) || isWebhookTunnellingIP(ip) {
+		return false
+	}
+	if ip.IsGlobalUnicast() && !isPrivateIP(ip) && !isReservedWebhookIP(ip) {
+		return true
+	}
+	if !allowPrivateWebhookURLs() {
+		return false
+	}
+	return !isReservedWebhookIP(ip)
+}
+
+// isReservedWebhookIP rejects special-purpose ranges that are not routable webhook
+// destinations: "this network" (0.0.0.0/8), IETF protocol assignments
+// (192.0.0.0/24), benchmarking (198.18.0.0/15) and the reserved 240.0.0.0/4 block.
+func isReservedWebhookIP(ip net.IP) bool {
+	v4 := ip.To4()
+	if v4 == nil {
+		return false
+	}
+	switch {
+	case v4[0] == 0:
+		return true
+	case v4[0] == 192 && v4[1] == 0 && v4[2] == 0:
+		return true
+	case v4[0] == 198 && (v4[1] == 18 || v4[1] == 19):
+		return true
+	case v4[0] >= 240:
+		return true
+	}
+	return false
+}
+
+// isWebhookTunnellingIP rejects 6to4 (2002::/16) and Teredo (2001::/32), which can
+// carry an arbitrary IPv4 destination that the visible IPv6 address would hide.
+func isWebhookTunnellingIP(ip net.IP) bool {
+	if ip.To4() != nil || len(ip) != net.IPv6len {
+		return false
+	}
+	if ip[0] == 0x20 && ip[1] == 0x02 {
+		return true
+	}
+	return ip[0] == 0x20 && ip[1] == 0x01 && ip[2] == 0x00 && ip[3] == 0x00
+}
+
 func allowPrivateNATSURLs() bool {
 	appEnv := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
 	if appEnv == "production" {
@@ -323,17 +381,29 @@ func ValidateWebhookURL(rawURL string) error {
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("APP_ENV")), "production") && u.Scheme != "https" {
 		return errors.New("production webhook url must use https scheme")
 	}
+	if u.User != nil {
+		return errors.New("webhook url must not contain inline credentials")
+	}
 	host := u.Hostname()
 	if host == "" {
 		return errors.New("webhook url must have a host")
+	}
+	if strings.Contains(host, "%") {
+		return errors.New("webhook url must not contain an IPv6 zone identifier")
+	}
+	if rawPort := u.Port(); rawPort != "" {
+		port, parseErr := strconv.Atoi(rawPort)
+		if parseErr != nil || port < 1 || port > 65535 {
+			return errors.New("webhook url must use a valid numeric port")
+		}
 	}
 	ips, err := resolveHostIPs(host)
 	if err != nil {
 		return fmt.Errorf("webhook url host lookup failed: %w", err)
 	}
 	for _, ip := range ips {
-		if isPrivateIP(ip) && !allowPrivateWebhookURLs() {
-			return errors.New("webhook url must not resolve to a private or loopback address")
+		if !WebhookDestinationAllowed(ip) {
+			return errors.New("webhook url must not resolve to a private or loopback address or any other non-public destination")
 		}
 	}
 	return nil

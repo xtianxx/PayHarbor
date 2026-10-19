@@ -1,8 +1,8 @@
-# Gateway - Multi-Chain Crypto Payment Gateway and Wallet Provider Infrastructure
+# PayHarbor - Multi-Chain Crypto Payment Gateway and Wallet Provider Infrastructure
 
 Dil: [English](README.md) | **Türkçe**
 
-Gateway, Go ile geliştirilmiş bir **B2B crypto payment gateway**, **kripto ödeme geçidi** ve **wallet-provider altyapısıdır**. Merchant'ların kripto para ile ödeme almasını, geliştiricilerin kullanıcı bazlı çok zincirli cüzdan adresleri üretmesini ve wallet/exchange tarzı ürünlerin deposit, payment, payout, refund, sweep, webhook, ledger ve reconciliation akışlarını tek para çekirdeği üzerinden yönetmesini sağlar.
+PayHarbor, Go ile geliştirilmiş bir **B2B crypto payment gateway**, **kripto ödeme geçidi** ve **wallet-provider altyapısıdır**. Merchant'ların kripto para ile ödeme almasını, geliştiricilerin kullanıcı bazlı çok zincirli cüzdan adresleri üretmesini ve wallet/exchange tarzı ürünlerin deposit, payment, payout, refund, sweep, webhook, ledger ve reconciliation akışlarını tek para çekirdeği üzerinden yönetmesini sağlar.
 
 Proje sadece bir checkout sayfası değildir. Hosted checkout, static deposit address, merchant API, HMAC-signed webhooks, blockchain listeners, ledger-backed balances, finality gates, sweep operations, refund/payout workflows, provider health ve production readiness kontrollerini aynı Go uygulaması içinde birleştirir. Uygulama Go Fiber v3, GORM, PostgreSQL, Trust Wallet Core, Tailwind CSS ve server-rendered merchant/admin/checkout ekranları üzerine kuruludur.
 
@@ -10,7 +10,7 @@ Kapsadığı ana arama niyetleri: `crypto payment gateway`, `multi-chain payment
 
 ## Bu Proje Ne Yapar?
 
-Gateway, merchant ve wallet ekiplerinin kripto para ödeme altyapısını sıfırdan kurmak zorunda kalmadan kontrollü şekilde canlıya çıkabilmesi için tasarlanmıştır:
+PayHarbor, merchant ve wallet ekiplerinin kripto para ödeme altyapısını sıfırdan kurmak zorunda kalmadan kontrollü şekilde canlıya çıkabilmesi için tasarlanmıştır:
 
 - Merchant'lar için hosted checkout, invoice/payment link, static deposit address ve `/api/v1` merchant API sağlar.
 - Bitcoin, Ethereum, TRON, Solana, Avalanche, BNB Chain, Base, Arbitrum, Unichain ve Chiliz ağlarında adres üretimi, adres doğrulama, transfer/sweep hazırlığı ve listener altyapısını bir araya getirir.
@@ -22,7 +22,7 @@ Gateway, merchant ve wallet ekiplerinin kripto para ödeme altyapısını sıfı
 
 ## Hangi Problemleri Çözer?
 
-| Problem | Gateway'in Çözümü | Sonuç |
+| Problem | PayHarbor'un Çözümü | Sonuç |
 | --- | --- | --- |
 | Merchant kripto ödeme almak istiyor ama her chain için ayrı checkout, wallet, listener ve webhook yazmak istemiyor. | Hosted checkout, payment session, static deposit address, merchant API ve multi-chain asset registry tek üründe birleşir. | Merchant entegrasyonu daha hızlı ve daha az hataya açık olur. |
 | Kullanıcı bazlı deposit adreslerini manuel üretmek ve izlemek operasyonel risk yaratıyor. | Trust Wallet Core tabanlı HD wallet/address üretimi, address lookup, blockchain listener ve deposit lifecycle servisleri kullanılır. | Kullanıcı/adres eşleşmesi ve ödeme takibi sistematik hale gelir. |
@@ -89,7 +89,7 @@ Desteklenen ağlar:
 2. Merchant için domain kaydı, API key, API secret, webhook URL, webhook secret ve izin kapsamları ayarlanır.
 3. Merchant `/api/v1/payment/create`, hosted checkout veya panel üzerinden invoice/payment session oluşturur.
 4. Kullanıcı checkout ekranında desteklenen ağ ve varlığı seçer.
-5. Gateway ödeme oturumu için deposit address, expected amount, QR code ve realtime status kanalı üretir.
+5. PayHarbor ödeme oturumu için deposit address, expected amount, QR code ve realtime status kanalı üretir.
 6. Blockchain listener worker'ları ilgili ağları izler ve on-chain event'leri durable chain fact olarak kaydeder.
 7. Deposit fact worker address ownership, chain, asset, amount ve finality bilgilerini eşleştirir.
 8. Payment session beklenen tutar ve asset ile eşleştiğinde payment status güncellenir; underpaid, overpaid, partial paid veya succeeded event'leri üretilebilir.
@@ -98,7 +98,7 @@ Desteklenen ağlar:
 
 ## Product Readiness
 
-Gateway şu an kontrollü merchant/dealer beta için değerlendirilecek şekilde konumlandırılmıştır. Production payment gateway, wallet-provider custody ve exchange-grade tracking iddiaları ayrı readiness gate'lerine bağlıdır. Özellikle production custody için process içi software signer kullanılmamalı; KMS/HSM/MPC/Vault veya eşdeğer external signer adapter'ı, reconciliation kanıtı, compliance kapsamı ve operasyonel runbook'lar tamamlanmadan yüksek hacimli müşteri fonu tutulmamalıdır.
+PayHarbor şu an kontrollü merchant/dealer beta için değerlendirilecek şekilde konumlandırılmıştır. Production payment gateway, wallet-provider custody ve exchange-grade tracking iddiaları ayrı readiness gate'lerine bağlıdır. Özellikle production custody için process içi software signer kullanılmamalı; KMS/HSM/MPC/Vault veya eşdeğer external signer adapter'ı, reconciliation kanıtı, compliance kapsamı ve operasyonel runbook'lar tamamlanmadan yüksek hacimli müşteri fonu tutulmamalıdır.
 
 Detaylı durum ve sınırlar:
 
@@ -233,7 +233,7 @@ PORTAL_JWT_SECRET=32-byte-or-longer-portal-jwt-secret
 MNEMONIC_PHRASE="your bip39 mnemonic phrase"
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=change-this-password
-ADMIN_NAME=Gateway Admin
+ADMIN_NAME=PayHarbor Admin
 TRON_GRPC_ENDPOINTS=grpc.trongrid.io:50051
 TRON_TESTNET_JSONRPC_URLS=https://nile.trongrid.io/jsonrpc
 TRON_TESTNET_HTTP_ENDPOINTS=https://nile.trongrid.io
@@ -446,7 +446,7 @@ Ana web ekranları:
 
 ## x402 HTTP Ödemeleri
 
-Gateway, mevcut Fiber route'ları ve hosted checkout akışı için opt-in x402 v2 seller olarak çalışabilir. x402 varsayılan olarak kapalıdır ve merchant API key, HMAC veya portal authentication akışlarının yerine geçmez.
+PayHarbor, mevcut Fiber route'ları ve hosted checkout akışı için opt-in x402 v2 seller olarak çalışabilir. x402 varsayılan olarak kapalıdır ve merchant API key, HMAC veya portal authentication akışlarının yerine geçmez.
 
 Entegrasyon, resmi [`x402-foundation/x402` Go SDK'sını](https://github.com/x402-foundation/x402/tree/main/go) Fiber-to-`net/http` adaptörü üzerinden kullanır. EVM ve Solana network'lerinde `exact` şeması desteklenir:
 

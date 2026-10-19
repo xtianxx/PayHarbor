@@ -2,7 +2,7 @@
     "swagger": "2.0",
     "info": {
         "description": "Multi-chain merchant payment gateway API.",
-        "title": "Gateway API",
+        "title": "PayHarbor API",
         "contact": {},
         "version": "1.0"
     },

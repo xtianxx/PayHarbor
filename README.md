@@ -1,16 +1,25 @@
-# Gateway - Multi-Chain Crypto Payment Gateway and Wallet Provider Infrastructure
+# PayHarbor - Multi-Chain Crypto Payment Gateway and Wallet Provider Infrastructure
 
 Language: **English** | [Türkçe](README.tr.md)
 
-Gateway is a Go-based **B2B crypto payment gateway**, **multi-chain cryptocurrency payment processor**, and **wallet-provider infrastructure platform**. It helps merchants accept crypto payments, lets developers generate user-level multi-chain wallet addresses, and gives wallet or exchange-style products a shared money core for deposits, payments, payouts, refunds, sweeps, webhooks, ledgers, and reconciliation.
+> **Status (this snapshot):** a locally verifiable engineering project — not production-audited, not certified and not deployed to production. Current boundaries are listed in [Limitations](#limitations-current-snapshot).
+
+PayHarbor is a Go-based **B2B crypto payment gateway**, **multi-chain cryptocurrency payment processor**, and **wallet-provider infrastructure platform**. It helps merchants accept crypto payments, lets developers generate user-level multi-chain wallet addresses, and gives wallet or exchange-style products a shared money core for deposits, payments, payouts, refunds, sweeps, webhooks, ledgers, and reconciliation.
 
 This project is not just a hosted checkout page. It combines hosted checkout, static deposit addresses, a merchant API, HMAC-signed webhooks, blockchain listeners, ledger-backed balances, finality gates, sweep operations, refund and payout workflows, provider health checks, and production readiness controls in one Go application. The stack is built with Go Fiber v3, GORM, PostgreSQL, Trust Wallet Core, Tailwind CSS, and server-rendered merchant, admin, invoice, and checkout views.
 
-Primary search intent covered by this README: `crypto payment gateway`, `multi-chain payment gateway`, `cryptocurrency payment processor`, `wallet provider API`, `merchant crypto checkout`, `static deposit address`, `blockchain payment gateway`, `HMAC webhook payment API`, `Go payment gateway`, `PostgreSQL ledger reconciliation`.
+## Documentation Map
 
-## What Does Gateway Do?
+- [Developer Guide](docs/developer-guide.md) — local loop, architecture notes, migrations, tests.
+- [Offline development environment](docs/offline-development.md) — `GATEWAY_OFFLINE=true` stack with no listeners, money workers or outbound traffic.
+- [Baseline test harness](deploy/compose/baseline/README.md) — Prepare/Build/Test/Smoke phases on an internal-only compose network (`scripts/baseline/run-tests.sh`, `verify-test-json.py`).
+- [Money path observability runbook](docs/money-path-observability-runbook.md) and [Sweep operations runbook](docs/sweep-operations-runbook.md).
+- [Project notes](docs/portfolio.md) — architecture and verification notes (Chinese).
+- Testing quick reference: `go test ./...` for the Go suite, plus the baseline harness above for the containerised, exit-code-verified run; the read-only observer package regresses with `go test ./services/outboundobserver/`.
 
-Gateway is designed for merchant, wallet, and exchange-style teams that need crypto payment infrastructure without building every chain, wallet, listener, ledger, and webhook component from scratch.
+## What Does PayHarbor Do?
+
+PayHarbor is designed for merchant, wallet, and exchange-style teams that need crypto payment infrastructure without building every chain, wallet, listener, ledger, and webhook component from scratch.
 
 - Provides hosted checkout, invoice/payment links, static deposit addresses, and a `/api/v1` merchant API.
 - Brings together address generation, address validation, transfer/sweep preparation, and listener infrastructure for Bitcoin, Ethereum, TRON, Solana, Avalanche, BNB Chain, Base, Arbitrum, Unichain, and Chiliz.
@@ -22,7 +31,7 @@ Gateway is designed for merchant, wallet, and exchange-style teams that need cry
 
 ## Problems It Solves
 
-| Problem | Gateway Solution | Result |
+| Problem | PayHarbor Solution | Result |
 | --- | --- | --- |
 | Merchants want to accept crypto payments without building a separate checkout, wallet, listener, and webhook stack for every chain. | Hosted checkout, payment sessions, static deposit addresses, merchant API, and a multi-chain asset registry are built into one product. | Merchant integration becomes faster and less error-prone. |
 | User-level deposit addresses are risky to generate and track manually. | Trust Wallet Core-based HD wallet/address generation, address lookup, blockchain listeners, and deposit lifecycle services are used together. | User/address matching and payment tracking become systematic. |
@@ -89,7 +98,7 @@ Example registered assets:
 2. A merchant domain is configured with API key, API secret, webhook URL, webhook secret, and permission scopes.
 3. The merchant creates an invoice/payment session through `/api/v1/payment/create`, hosted checkout, or the portal.
 4. The customer selects a supported network and asset on the checkout screen.
-5. Gateway creates the deposit address, expected amount, QR code, and realtime status channel for the payment session.
+5. PayHarbor creates the deposit address, expected amount, QR code, and realtime status channel for the payment session.
 6. Blockchain listener workers watch their networks and store on-chain events as durable chain facts.
 7. The deposit fact worker matches address ownership, chain, asset, amount, and finality state.
 8. When the payment session matches the expected amount and asset, payment status is updated. Underpaid, overpaid, partial paid, or succeeded events can be emitted.
@@ -98,7 +107,7 @@ Example registered assets:
 
 ## Product Readiness
 
-Gateway is currently positioned for controlled merchant/dealer beta evaluation. Production payment gateway, wallet-provider custody, and exchange-grade tracking claims are gated by separate readiness levels. In particular, production custody must not rely on an in-process software signer. KMS, HSM, MPC, Vault, or an equivalent external signer adapter, reconciliation evidence, compliance scope, and operational runbooks must be completed before holding high-volume customer funds.
+PayHarbor is currently positioned for controlled merchant/dealer beta evaluation. Production payment gateway, wallet-provider custody, and exchange-grade tracking claims are gated by separate readiness levels. In particular, production custody must not rely on an in-process software signer. KMS, HSM, MPC, Vault, or an equivalent external signer adapter, reconciliation evidence, compliance scope, and operational runbooks must be completed before holding high-volume customer funds.
 
 Detailed readiness and operating boundaries:
 
@@ -109,9 +118,21 @@ Detailed readiness and operating boundaries:
 - [Money Path Observability Runbook](docs/money-path-observability-runbook.md)
 - [Sweep Operations Runbook](docs/sweep-operations-runbook.md)
 
+## Limitations (current snapshot)
+
+- This repository is a **local engineering project**: it is not a production-audited or certified payment platform, and this document does not claim a production deployment.
+- Broadcast payouts and sweeps keep the fund **hold** and stay in **manual reconciliation** until an operator/terminal policy decides the outcome; automatic terminal finality for BTC/SOL/TRON outbound payments is not implemented.
+- `services/outboundobserver` is a **read-only** observation component: it never writes to the database, the ledger or the outbox, and it is **not wired into the running worker set**. Its answers are bounded evidence (including `unknown`), never finality.
+- No root `LICENSE` file is provided in this snapshot; third-party components keep their own upstream licenses (for example Trust Wallet Core under `third_party/trustwallet/`).
+
 ## Developer Documentation
 
 Developer-focused contribution and extension notes live in [Developer Guide](docs/developer-guide.md). It covers the local development loop, code ownership boundaries, common change checklists, migrations, workers, API changes, asset/chain additions, tests, and PR expectations.
+
+For a local environment that runs without chain listeners, money workers, or any
+outbound traffic from the application and database containers, see
+[Offline Development Environment](docs/offline-development.md)
+(`GATEWAY_OFFLINE=true` plus the Docker stack in `deploy/compose/offline/`).
 
 ## Project Structure
 
@@ -153,8 +174,8 @@ Developer-focused contribution and extension notes live in [Developer Guide](doc
 Clone the repository with the Trust Wallet Core submodule:
 
 ```bash
-git clone --recurse-submodules <repo-url> gateway
-cd gateway
+git clone --recurse-submodules https://github.com/xtianxx/PayHarbor.git PayHarbor
+cd PayHarbor
 ```
 
 If the repository was cloned without submodules or the submodule directory is empty, run:
@@ -233,7 +254,7 @@ PORTAL_JWT_SECRET=32-byte-or-longer-portal-jwt-secret
 MNEMONIC_PHRASE="your bip39 mnemonic phrase"
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=change-this-password
-ADMIN_NAME=Gateway Admin
+ADMIN_NAME=PayHarbor Admin
 TRON_GRPC_ENDPOINTS=grpc.trongrid.io:50051
 TRON_TESTNET_JSONRPC_URLS=https://nile.trongrid.io/jsonrpc
 TRON_TESTNET_HTTP_ENDPOINTS=https://nile.trongrid.io
@@ -711,7 +732,7 @@ cd ../exchange
 ./scripts/smoke_gateway_deposit.sh
 ```
 
-This test does not require admin login. Gateway decrypts the domain webhook secret, sends a signed BTC deposit to the exchange callback, and verifies that the balance increases in the exchange database.
+This test does not require admin login. PayHarbor decrypts the domain webhook secret, sends a signed BTC deposit to the exchange callback, and verifies that the balance increases in the exchange database.
 
 If the Trust Wallet Core submodule is not ready, first run `git submodule update --init --recursive third_party/trustwallet/wallet-core`. If the native build is not ready, run `./scripts/build_wallet_core.sh`. The `walletcorefallback` build tag is only for narrow local debugging and must not be used for production wallet generation or transfer signing.
 

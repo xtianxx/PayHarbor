@@ -780,9 +780,11 @@ func TestPaymentRepoMarkReorgedDoesNotReopenAlreadyCorrectedWebhook(t *testing.T
 	merchantID := uuid.New()
 	domainID := uuid.New()
 	walletID := uuid.New()
-	now := time.Now()
 	txUniqueHash := "already-corrected-" + uuid.NewString()
 	txHash := "0x" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	// PostgreSQL stores timestamps with microsecond resolution, so seed values must be
+	// microsecond-exact for strict round-trip equality checks on WebhookSentAt.
+	now := time.Now().Truncate(time.Microsecond)
 	sentAt := now.Add(-time.Minute)
 	session := models.PaymentSession{
 		ID:                   uuid.New(),

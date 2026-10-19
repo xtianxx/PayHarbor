@@ -1166,6 +1166,7 @@ func TestReorgedPendingSweepCanonicalReappearanceCreatesFreshHoldGenerationAndRe
 		&models.LedgerEntry{},
 		&models.LedgerBalanceProjection{},
 		&models.SweepJob{},
+		&models.OutboundTransaction{},
 		&models.ReconciliationJob{},
 	); err != nil {
 		t.Fatalf("automigrate revived sweep models: %v", err)
@@ -1311,7 +1312,7 @@ func TestReorgedPendingSweepCanonicalReappearanceCreatesFreshHoldGenerationAndRe
 
 func TestReorgedSucceededSweepMovesToOperatorReconciliationWithoutBlindRevival(t *testing.T) {
 	db := openMoneyEventOutboxPostgresTestDB(t)
-	if err := db.AutoMigrate(&models.Transaction{}, &models.LedgerEntry{}, &models.SweepJob{}); err != nil {
+	if err := db.AutoMigrate(&models.Transaction{}, &models.LedgerEntry{}, &models.SweepJob{}, &models.OutboundTransaction{}); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()

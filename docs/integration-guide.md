@@ -1,4 +1,4 @@
-# Gateway Integration Guide
+# PayHarbor Integration Guide
 
 This document is written for developers and AI coding agents integrating merchant systems with this payment gateway.
 
@@ -306,7 +306,7 @@ Deposits to this address are detected by blockchain listeners and can generate t
 
 ## Create Wallet Provider Wallet
 
-Use this when your product needs Gateway to act as a wallet provider. The endpoint creates or returns one deterministic multi-chain wallet for a merchant user and product scope.
+Use this when your product needs PayHarbor to act as a wallet provider. The endpoint creates or returns one deterministic multi-chain wallet for a merchant user and product scope.
 
 ```http
 POST /api/v1/wallet/create
@@ -529,6 +529,8 @@ Idempotency-Key: refund-ORDER-1001-v1
 
 Refund requests are also checked against the configured outbound policy before the refund hold is created. Destination whitelist checks run again during admin approval when the original sender address is known.
 
+Concurrent refund requests for the same payment are serialised inside one database transaction, so the cumulative refundable limit for that payment is enforced atomically and cannot be exceeded by racing requests. This is a per-payment, read-only cap serialisation — it is not a whole-database deadlock guarantee: if the wallet's ledger asset is momentarily held by another operation, refund creation returns `503` and the caller may retry later with the same `Idempotency-Key`.
+
 Request body:
 
 ```json
@@ -595,6 +597,8 @@ The gateway re-fetches the transaction and replays wallet matching, payment matc
 ## Webhooks
 
 The gateway uses one callback URL per domain. The merchant integration should route by `event_type` in the JSON body or by `X-Gateway-Event` header.
+
+Webhook egress is hardened: the gateway never follows HTTP redirects (a `3xx` response is a delivery failure, so the signed payload is never replayed to a redirect target), it ignores environment `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` settings, and every new connection re-resolves and validates the callback destination before dialling, so a hostname that resolves to a private or otherwise non-public address is refused even when the URL was validated earlier. Outside production, local development receivers (private/loopback addresses such as `http://127.0.0.1:3000/...`) remain usable; production only delivers to public HTTPS destinations.
 
 For NATS delivery, create or update the domain with `notification_mode: "nats"`, `nats_url`, and an optional `nats_subject` (default: `gateway.events`). The same JSON event body is published to that subject through JetStream; webhook HMAC headers are used only in `webhook` mode.
 
@@ -817,9 +821,9 @@ Event examples:
 1. Merchant backend creates a payment with `POST /api/v1/payment/create`.
 2. Merchant redirects customer to `checkout_url`.
 3. Customer selects chain/asset and pays.
-4. Gateway detects blockchain transaction.
-5. Gateway marks payment `paid`.
-6. Gateway sends `payment_succeeded` webhook to the domain callback URL.
+4. PayHarbor detects blockchain transaction.
+5. PayHarbor marks payment `paid`.
+6. PayHarbor sends `payment_succeeded` webhook to the domain callback URL.
 7. Merchant verifies webhook signature.
 8. Merchant idempotently fulfills `order_id`.
 
@@ -827,8 +831,8 @@ Event examples:
 
 1. Merchant backend creates/reuses address with `POST /api/v1/payment/static-address`.
 2. Merchant shows the address to the customer.
-3. Gateway detects deposits to the address.
-4. Gateway sends transaction webhook events to the domain callback URL.
+3. PayHarbor detects deposits to the address.
+4. PayHarbor sends transaction webhook events to the domain callback URL.
 5. Merchant verifies signature and credits the user based on `event_id`.
 
 ### Payout Flow
@@ -897,9 +901,9 @@ The same V1 envelope is used for validation failures, idempotency conflicts, uns
 
 Webhook delivery behavior:
 
-- Gateway retries failed webhook deliveries.
-- Gateway may replay a failed or dead-lettered webhook with the same event id/type/version.
-- Gateway preserves per-resource ordering for active delivery lanes.
+- PayHarbor retries failed webhook deliveries.
+- PayHarbor may replay a failed or dead-lettered webhook with the same event id/type/version.
+- PayHarbor preserves per-resource ordering for active delivery lanes.
 - Merchant endpoint should return any `2xx` status after successfully persisting the event.
 - Merchant endpoint should be idempotent because retries can happen.
 

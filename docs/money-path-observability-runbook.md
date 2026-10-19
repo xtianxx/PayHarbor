@@ -30,6 +30,7 @@ Controlled-beta alert rules:
 - Webhooks: alert on any `dead_letter` delivery or failed deliveries increasing for 10 minutes.
 - Money outbox: alert when `pending` or `processing` backlog grows for 10 minutes.
 - Withdrawals/refunds: alert when `processing` rows remain for more than one finality window.
+- Outbound transactions: broadcast rights are granted by one short transaction (`AcquireSendGrant`) that re-verifies the row and its withdrawal/refund under locks, so a losing worker holds no chain resource and can never release the winner's; an outbound row whose broadcast outcome is unknown (`broadcast_attempted`) is moved to `needs_operator_action` with category `broadcast_recovery_required` and must never be re-sent automatically. When a hash becomes known only after such a row was moved to the operator queue, it may be backfilled solely by binding it to the exact granted attempt (same `broadcast_attempted_at`, empty hash) — never as an operator-supplied hash; resolve the row from that evidence before any replacement.
 - Sweep jobs: alert on any `dead_letter` job or repeated `broadcast_uncertain` failure category.
 - Reconciliation: alert on any `needs_operator_action` or unresolved drift older than 30 minutes.
 - Signer: alert when `gateway_production_signer_ready` is `0` in production.
@@ -111,3 +112,7 @@ Baseline dashboard panels are documented in `docs/money-path-dashboard.md`. The 
 - Run `database.VerifySchema`.
 - Run read-only balance, webhook, outbox, and reconciliation queries.
 - Do not resume production traffic from a restored environment without explicit operator signoff.
+
+## Read-Only Outbound Observation (not wired)
+
+`services/outboundobserver` is a read-only EVM observation component for already-persisted outbound intents: it takes a caller-supplied RPC endpoint and a persisted intent, then reports `unknown` / `pending` / `included` plus execution status, canonical block evidence, confirmations and intent match. It writes nothing (no database, ledger, outbox, hold release or re-broadcast), it never claims PoS finality or L2 settlement, and confirmations are an observation only. Coverage is deliberately narrow: plain EVM native transfers and standard direct ERC20 `transfer` calls with exact raw amounts. The `Kind` is a caller declaration, so an unsupported kind string is a refusal, not runtime detection: this component verifies the signed call and the receipt's own evidence (canonical block, transaction index, receipt status 0/1, and — for ERC20 — the token's attributed Transfer log for this transaction/block), and it cannot certify token economics, fee-on-transfer/rebasing behaviour or proxy routing for arbitrary tokens. Non-EVM chain ids are refused before any RPC call, and the transaction is rebuilt from the standard JSON-RPC fields (no vendor raw extension). Sweep-"max" actual amounts, fee-on-transfer or proxy routing, cross-chain flows and non-EVM families are reported as unsupported, never as success. The component is **not wired into any worker**; thresholds and automatic terminal transitions remain a separate, reviewed step.

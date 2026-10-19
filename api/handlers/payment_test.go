@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"core/localization"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -24,7 +26,6 @@ import (
 	"core/types"
 
 	"github.com/gofiber/fiber/v3"
-	fiberhtml "github.com/gofiber/template/html/v3"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -92,13 +93,20 @@ func TestCheckoutCanonicalSymbolAliases(t *testing.T) {
 	}
 }
 
+// parseBuyerTemplate parses one buyer template with the production translation helper, so
+// the catalog-backed copy renders exactly as the view engine renders it.
+func parseBuyerTemplate(t *testing.T, path string) *template.Template {
+	t.Helper()
+	tmpl, err := template.New(filepath.Base(path)).Funcs(template.FuncMap{"t": localization.T}).ParseFiles(path)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	return tmpl
+}
+
 func TestCheckoutTemplateParses(t *testing.T) {
-	if _, err := template.ParseFiles("../../views/gateway/checkout.html"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := template.ParseFiles("../../views/gateway/payment_result.html"); err != nil {
-		t.Fatal(err)
-	}
+	parseBuyerTemplate(t, "../../views/gateway/checkout.html")
+	parseBuyerTemplate(t, "../../views/gateway/payment_result.html")
 }
 
 func TestCheckoutLanguageSwitcherMarkupContract(t *testing.T) {
@@ -112,8 +120,7 @@ func TestCheckoutLanguageSwitcherMarkupContract(t *testing.T) {
 			`class="crypto-lang-switch"`,
 			`class="crypto-lang-trigger"`,
 			`data-language-open`,
-			`Change language, current language English`,
-			`Dili değiştir, geçerli dil Türkçe`,
+			`Change language, current language %s`,
 			`aria-haspopup="dialog"`,
 			`aria-expanded="false"`,
 			`aria-controls="checkoutLanguageDialog"`,
@@ -123,14 +130,14 @@ func TestCheckoutLanguageSwitcherMarkupContract(t *testing.T) {
 			`aria-labelledby="checkoutLanguageTitle"`,
 			`data-language-close`,
 			`class="crypto-lang-options"`,
-			`class="crypto-lang-flag" src="/static/icons/flags/tr.svg"`,
+			`class="crypto-lang-flag" src="/static/icons/flags/cn.svg"`,
 			`class="crypto-lang-flag" src="/static/icons/flags/gb.svg"`,
-			`class="crypto-lang-name">Türkçe`,
-			`class="crypto-lang-name">English`,
+			`class="crypto-lang-name">{{ t "zh-CN" "Simplified Chinese" }}`,
+			`class="crypto-lang-name">{{ t "en" "English" }}`,
 			`aria-current="page"`,
-			`aria-label="Türkçe"`,
-			`aria-label="English"`,
-			`hreflang="tr"`,
+			`aria-label="{{ t "zh-CN" "Simplified Chinese" }}"`,
+			`aria-label="{{ t "en" "English" }}"`,
+			`hreflang="zh-CN"`,
 			`hreflang="en"`,
 		} {
 			if !strings.Contains(html, want) {
@@ -374,7 +381,7 @@ func TestHandleCheckoutSelectAssetRejectsNonX402AssetsBeforeMutation(t *testing.
 				},
 			}
 			repo := &fakePaymentSessionRepo{sessions: []*models.PaymentSession{session}}
-			app := fiber.New(fiber.Config{Views: fiberhtml.New("../../views", ".html")})
+			app := fiber.New(fiber.Config{Views: newHandlerTestViews()})
 			app.Post("/checkout/:token/select", HandleCheckoutSelectAsset(PaymentHandlerDeps{
 				PaymentRepo:   repo,
 				AssetRegistry: registry,
@@ -437,14 +444,14 @@ func TestHandleCheckoutRendersCombinedAssetNetworkSelection(t *testing.T) {
 		},
 	}
 	repo := &fakePaymentSessionRepo{sessions: []*models.PaymentSession{session}}
-	app := fiber.New(fiber.Config{Views: fiberhtml.New("../../views", ".html")})
+	app := fiber.New(fiber.Config{Views: newHandlerTestViews()})
 	app.Get("/checkout/:token", HandleCheckout(PaymentHandlerDeps{
 		PaymentRepo:   repo,
 		AssetRegistry: registry,
 		PriceOracle:   panicPriceOracle{},
 	}))
 
-	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/checkout/checkout-token?lang=tr", nil))
+	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/checkout/checkout-token", nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -457,7 +464,7 @@ func TestHandleCheckoutRendersCombinedAssetNetworkSelection(t *testing.T) {
 	if resp.StatusCode != fiber.StatusOK {
 		t.Fatalf("status = %d body=%s", resp.StatusCode, html)
 	}
-	if !strings.Contains(html, `method="post" action="/checkout/checkout-token/select?lang=tr"`) {
+	if !strings.Contains(html, `method="post" action="/checkout/checkout-token/select"`) {
 		t.Fatalf("checkout did not render direct asset/network forms: %s", html)
 	}
 	if !strings.Contains(html, `name="symbol" value="ETH"`) || !strings.Contains(html, `name="symbol" value="USDT"`) {
@@ -492,7 +499,7 @@ func TestHandleCheckoutEnsuresWalletAddressesBeforeBuildingX402Picker(t *testing
 		},
 	}
 
-	app := fiber.New(fiber.Config{Views: fiberhtml.New("../../views", ".html")})
+	app := fiber.New(fiber.Config{Views: newHandlerTestViews()})
 	app.Get("/checkout/:token", HandleCheckout(PaymentHandlerDeps{
 		PaymentRepo:   paymentRepo,
 		WalletRepo:    walletRepo,
@@ -684,7 +691,7 @@ func TestHandleCheckoutSelectAssetRejectsDepositBlockedNetworkBeforeMutation(t *
 			Reason:  "Ethereum is under scheduled maintenance.",
 		},
 	}}
-	app := fiber.New(fiber.Config{Views: fiberhtml.New("../../views", ".html")})
+	app := fiber.New(fiber.Config{Views: newHandlerTestViews()})
 	app.Post("/checkout/:token/select", HandleCheckoutSelectAsset(PaymentHandlerDeps{
 		PaymentRepo:                 paymentRepo,
 		NetworkOperationalStateRepo: networkRepo,
@@ -752,7 +759,7 @@ func TestSelectedCheckoutGETRejectsDepositBlockedNetwork(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			app := fiber.New(fiber.Config{Views: fiberhtml.New("../../views", ".html")})
+			app := fiber.New(fiber.Config{Views: newHandlerTestViews()})
 			app.Get(tt.route, tt.handler(PaymentHandlerDeps{PaymentRepo: paymentRepo, NetworkOperationalStateRepo: networkRepo}))
 			resp, err := app.Test(httptest.NewRequest(http.MethodGet, tt.path+"?lang=en", nil))
 			if err != nil {
@@ -814,7 +821,7 @@ func TestPaidCheckoutSurfacesRemainReadableDuringNetworkMaintenance(t *testing.T
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			app := fiber.New(fiber.Config{Views: fiberhtml.New("../../views", ".html")})
+			app := fiber.New(fiber.Config{Views: newHandlerTestViews()})
 			app.Get(tt.route, tt.handler(PaymentHandlerDeps{PaymentRepo: paymentRepo, NetworkOperationalStateRepo: networkRepo}))
 			resp, err := app.Test(httptest.NewRequest(http.MethodGet, tt.path+"?lang=en", nil))
 			if err != nil {
@@ -1358,7 +1365,7 @@ func TestHandleCheckoutRendersTerminalStateWithoutPayLoop(t *testing.T) {
 		ExpiresAt:    &future,
 	}
 	repo := &fakePaymentSessionRepo{sessions: []*models.PaymentSession{session}}
-	app := fiber.New(fiber.Config{Views: fiberhtml.New("../../views", ".html")})
+	app := fiber.New(fiber.Config{Views: newHandlerTestViews()})
 	app.Get("/checkout/:token", HandleCheckout(PaymentHandlerDeps{PaymentRepo: repo}))
 	app.Get("/checkout/:token/pay", HandleCheckoutPay(PaymentHandlerDeps{PaymentRepo: repo}))
 
@@ -1375,7 +1382,7 @@ func TestHandleCheckoutRendersTerminalStateWithoutPayLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := string(body)
-	for _, want := range []string{"Iptal edildi", "Gateway Pay", "crypto-flow-select", "crypto-lang-switch", "crypto-result-panel"} {
+	for _, want := range []string{"已取消", "PayHarbor", "crypto-flow-select", "crypto-lang-switch", "crypto-result-panel"} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("terminal checkout missing %q in:\n%s", want, html)
 		}
@@ -1397,7 +1404,7 @@ func TestHandleCheckoutRendersTerminalStateWithoutPayLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	payHTML := string(payBody)
-	if !strings.Contains(payHTML, "Iptal edildi") || strings.Contains(payHTML, "data-checkout-status") || strings.Contains(payHTML, "status.json") {
+	if !strings.Contains(payHTML, "已取消") || strings.Contains(payHTML, "data-checkout-status") || strings.Contains(payHTML, "status.json") {
 		t.Fatalf("terminal pay rendered polling page:\n%s", payHTML)
 	}
 }
@@ -1442,15 +1449,36 @@ func TestCheckoutMutationHandlersRejectGETWithoutMutation(t *testing.T) {
 	}
 }
 
-func TestHandleCheckoutChangeAssetPostPreservesLanguage(t *testing.T) {
+func TestHandleCheckoutChangeAssetPostKeepsTheRecordedLocale(t *testing.T) {
 	future := time.Now().Add(10 * time.Minute)
 	for _, tt := range []struct {
-		name   string
-		path   string
-		cookie string
+		name         string
+		path         string
+		cookies      []string
+		wantHTMLLang string
 	}{
-		{name: "query language", path: "/checkout/checkout-token/change?lang=en"},
-		{name: "cookie language", path: "/checkout/checkout-token/change", cookie: "gateway_lang=en"},
+		{
+			name:         "recognized query language",
+			path:         "/checkout/checkout-token/change?lang=en",
+			wantHTMLLang: `lang="en"`,
+		},
+		{
+			name:         "recorded language cookie",
+			path:         "/checkout/checkout-token/change",
+			cookies:      []string{"gateway_portal_lang=en"},
+			wantHTMLLang: `lang="en"`,
+		},
+		{
+			name:         "recorded legacy language cookie",
+			path:         "/checkout/checkout-token/change",
+			cookies:      []string{"gateway_lang=en"},
+			wantHTMLLang: `lang="en"`,
+		},
+		{
+			name:         "no recorded language falls back to simplified chinese",
+			path:         "/checkout/checkout-token/change",
+			wantHTMLLang: `lang="zh-CN"`,
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			session := &models.PaymentSession{
@@ -1463,29 +1491,49 @@ func TestHandleCheckoutChangeAssetPostPreservesLanguage(t *testing.T) {
 				ExpiresAt:         &future,
 			}
 			repo := &fakeCheckoutMutationRepo{fakePaymentSessionRepo: &fakePaymentSessionRepo{sessions: []*models.PaymentSession{session}}}
-			app := fiber.New()
-			app.Post("/checkout/:token/change", HandleCheckoutChangeAsset(PaymentHandlerDeps{PaymentRepo: repo}))
+			deps := PaymentHandlerDeps{PaymentRepo: repo, AssetRegistry: buyerLocaleTestRegistry()}
+			app := fiber.New(fiber.Config{Views: newHandlerTestViews()})
+			app.Post("/checkout/:token/change", HandleCheckoutChangeAsset(deps))
+			app.Get("/checkout/:token", HandleCheckout(deps))
 			req := httptest.NewRequest(http.MethodPost, tt.path, nil)
-			if tt.cookie != "" {
-				req.Header.Set("Cookie", tt.cookie)
+			for _, cookie := range tt.cookies {
+				req.Header.Add("Cookie", cookie)
 			}
 
 			resp, err := app.Test(req)
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			if resp.StatusCode != fiber.StatusSeeOther {
 				t.Fatalf("status = %d, want 303", resp.StatusCode)
 			}
-			if got := resp.Header.Get("Location"); got != "/checkout/checkout-token?lang=en" {
-				t.Fatalf("Location = %q", got)
+			if got := resp.Header.Get("Location"); got != "/checkout/checkout-token" {
+				t.Fatalf("Location = %q, want the bare checkout path", got)
 			}
-			if !strings.Contains(strings.Join(resp.Header.Values("Set-Cookie"), ";"), "gateway_lang=en") {
-				t.Fatalf("language cookie missing: %v", resp.Header.Values("Set-Cookie"))
+			if strings.Contains(strings.Join(resp.Header.Values("Set-Cookie"), ";"), "lang=") {
+				t.Fatalf("handler must not write a language cookie: %v", resp.Header.Values("Set-Cookie"))
 			}
 			if repo.resetCalls != 1 || session.Status != models.PaymentStatusPending {
 				t.Fatalf("reset calls/status = %d/%s", repo.resetCalls, session.Status)
+			}
+
+			// The locale survives the mutation round trip through the recorded cookie.
+			followUp := httptest.NewRequest(http.MethodGet, resp.Header.Get("Location"), nil)
+			for _, cookie := range tt.cookies {
+				followUp.Header.Add("Cookie", cookie)
+			}
+			pageResp, err := app.Test(followUp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = pageResp.Body.Close() }()
+			page, err := io.ReadAll(pageResp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(page), tt.wantHTMLLang) {
+				t.Fatalf("checkout after change did not keep the locale %s:\n%s", tt.wantHTMLLang, page)
 			}
 		})
 	}
@@ -1513,8 +1561,8 @@ func TestHandleCheckoutCancelPostPreservesLanguageBeforeMerchantRedirect(t *test
 	if resp.StatusCode != fiber.StatusSeeOther || resp.Header.Get("Location") != session.CancelURL {
 		t.Fatalf("status/location = %d/%q", resp.StatusCode, resp.Header.Get("Location"))
 	}
-	if !strings.Contains(strings.Join(resp.Header.Values("Set-Cookie"), ";"), "gateway_lang=en") {
-		t.Fatalf("language cookie missing: %v", resp.Header.Values("Set-Cookie"))
+	if cookies := strings.Join(resp.Header.Values("Set-Cookie"), ";"); strings.Contains(cookies, "lang=") {
+		t.Fatalf("handler must not write a language cookie: %v", resp.Header.Values("Set-Cookie"))
 	}
 	if repo.cancelCalls != 1 || session.Status != models.PaymentStatusCanceled {
 		t.Fatalf("cancel calls/status = %d/%s", repo.cancelCalls, session.Status)
@@ -1534,7 +1582,7 @@ func TestHandleCheckoutCancelDoesNotReportSuccessWhenRepositoryFails(t *testing.
 		fakePaymentSessionRepo: &fakePaymentSessionRepo{sessions: []*models.PaymentSession{session}},
 		cancelErr:              errors.New("database unavailable"),
 	}
-	app := fiber.New(fiber.Config{Views: fiberhtml.New("../../views", ".html")})
+	app := fiber.New(fiber.Config{Views: newHandlerTestViews()})
 	app.Post("/checkout/:token/cancel", HandleCheckoutCancel(PaymentHandlerDeps{PaymentRepo: repo}))
 
 	resp, err := app.Test(httptest.NewRequest(http.MethodPost, "/checkout/checkout-token/cancel?lang=en", nil))
@@ -1560,7 +1608,7 @@ func TestHandleCheckoutCancelDoesNotReportSuccessWhenRepositoryFails(t *testing.
 	}
 }
 
-func TestCheckoutRedirectsPreserveLanguage(t *testing.T) {
+func TestCheckoutRedirectsStayInTheBuyerFlow(t *testing.T) {
 	future := time.Now().Add(10 * time.Minute)
 	tests := []struct {
 		name       string
@@ -1579,7 +1627,7 @@ func TestCheckoutRedirectsPreserveLanguage(t *testing.T) {
 			requestURL: "/checkout/checkout-token?lang=en",
 			status:     models.PaymentStatusAwaitingPayment,
 			handler:    HandleCheckout,
-			want:       "/checkout/checkout-token/pay?lang=en",
+			want:       "/checkout/checkout-token/pay",
 		},
 		{
 			name:       "pending pay cookie to checkout",
@@ -1589,7 +1637,7 @@ func TestCheckoutRedirectsPreserveLanguage(t *testing.T) {
 			cookie:     "gateway_lang=en",
 			status:     models.PaymentStatusPending,
 			handler:    HandleCheckoutPay,
-			want:       "/checkout/checkout-token?lang=en",
+			want:       "/checkout/checkout-token",
 		},
 		{
 			name:       "nonpaid success return query to pay",
@@ -1598,7 +1646,7 @@ func TestCheckoutRedirectsPreserveLanguage(t *testing.T) {
 			requestURL: "/checkout/checkout-token/return/success?lang=en",
 			status:     models.PaymentStatusAwaitingPayment,
 			handler:    HandleCheckoutSuccessReturn,
-			want:       "/checkout/checkout-token/pay?lang=en",
+			want:       "/checkout/checkout-token/pay",
 		},
 		{
 			name:       "paid change query to success",
@@ -1607,7 +1655,7 @@ func TestCheckoutRedirectsPreserveLanguage(t *testing.T) {
 			requestURL: "/checkout/checkout-token/change?lang=en",
 			status:     models.PaymentStatusPaid,
 			handler:    HandleCheckoutChangeAsset,
-			want:       "/checkout/checkout-token/return/success?lang=en",
+			want:       "/checkout/checkout-token/return/success",
 		},
 	}
 
@@ -1665,7 +1713,7 @@ func TestHandleCheckoutTerminalResultDoesNotPresentExpectedAmountAsPaid(t *testi
 				ExpiresAt:         &future,
 			}
 			repo := &fakePaymentSessionRepo{sessions: []*models.PaymentSession{session}}
-			app := fiber.New(fiber.Config{Views: fiberhtml.New("../../views", ".html")})
+			app := fiber.New(fiber.Config{Views: newHandlerTestViews()})
 			app.Get("/checkout/:token", HandleCheckout(PaymentHandlerDeps{PaymentRepo: repo}))
 
 			resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/checkout/"+session.SessionToken+"?lang=en", nil))
@@ -1702,10 +1750,10 @@ func TestHandleCheckoutPaidResultUsesLocalizedStatusLabel(t *testing.T) {
 		MatchedAmountRaw: "1000000000000000000000",
 	}
 	repo := &fakePaymentSessionRepo{sessions: []*models.PaymentSession{session}}
-	app := fiber.New(fiber.Config{Views: fiberhtml.New("../../views", ".html")})
+	app := fiber.New(fiber.Config{Views: newHandlerTestViews()})
 	app.Get("/checkout/:token", HandleCheckout(PaymentHandlerDeps{PaymentRepo: repo}))
 
-	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/checkout/paid-checkout-token?lang=tr", nil))
+	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/checkout/paid-checkout-token", nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1719,9 +1767,9 @@ func TestHandleCheckoutPaidResultUsesLocalizedStatusLabel(t *testing.T) {
 	}
 	html := string(body)
 	for _, want := range []string{
-		"Ödendi",
-		"Ödeme başarıyla alındı.",
-		"Tamamlandı",
+		"已支付",
+		"已收到付款。",
+		"已完成",
 		"1000 AVAX",
 		"Avalanche",
 	} {
@@ -1755,7 +1803,7 @@ func TestCheckoutSuccessReturnUsesCheckoutResultDesign(t *testing.T) {
 		Name:    "Premium Plan",
 		LogoURL: "/uploads/product-logo.svg",
 	}}
-	app := fiber.New(fiber.Config{Views: fiberhtml.New("../../views", ".html")})
+	app := fiber.New(fiber.Config{Views: newHandlerTestViews()})
 	app.Get("/checkout/:token/return/success", HandleCheckoutSuccessReturn(PaymentHandlerDeps{PaymentRepo: repo, ProductRepo: productRepo}))
 
 	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/checkout/paid-token/return/success?lang=en", nil))
@@ -1773,7 +1821,7 @@ func TestCheckoutSuccessReturnUsesCheckoutResultDesign(t *testing.T) {
 	html := string(body)
 	for _, want := range []string{
 		"Payment complete",
-		"Gateway Pay",
+		"PayHarbor",
 		"crypto-payment-result-page crypto-flow-select",
 		"crypto-lang-switch",
 		"crypto-lang-dialog",
@@ -1782,7 +1830,7 @@ func TestCheckoutSuccessReturnUsesCheckoutResultDesign(t *testing.T) {
 		"crypto-product-logo compact",
 		"/uploads/product-logo.svg",
 		"Premium Plan",
-		"/checkout/paid-token/return/success?lang=tr",
+		"/checkout/paid-token/return/success?lang=zh-CN",
 		"crypto-result-panel",
 		"Completed",
 		"order-paid",
@@ -1802,33 +1850,33 @@ func TestCheckoutSuccessReturnUsesCheckoutResultDesign(t *testing.T) {
 		t.Fatalf("success result page must not expose raw payment status:\n%s", html)
 	}
 
-	respTR, err := app.Test(httptest.NewRequest(http.MethodGet, "/checkout/paid-token/return/success?lang=tr", nil))
+	respZH, err := app.Test(httptest.NewRequest(http.MethodGet, "/checkout/paid-token/return/success", nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer respTR.Body.Close()
-	trBody, err := io.ReadAll(respTR.Body)
+	defer respZH.Body.Close()
+	zhBody, err := io.ReadAll(respZH.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	trHTML := string(trBody)
+	zhHTML := string(zhBody)
 	for _, want := range []string{
-		"Ödeme tamamlandı",
-		"Ödeme başarıyla alındı.",
-		"Ödeme durumu",
-		"Tamamlandı",
-		"Yatırılan tutar",
-		"İşlem detayları",
+		"支付完成",
+		"已收到付款。",
+		"支付状态",
+		"已完成",
+		"已支付金额",
+		"交易详情",
 		"/uploads/product-logo.svg",
-		"Dekont yazdır",
-		"Checkout'a dön",
+		"打印回执",
+		"返回结账",
 	} {
-		if !strings.Contains(trHTML, want) {
-			t.Fatalf("TR success result page missing %q in:\n%s", want, trHTML)
+		if !strings.Contains(zhHTML, want) {
+			t.Fatalf("zh-CN success result page missing %q in:\n%s", want, zhHTML)
 		}
 	}
-	if strings.Contains(trHTML, ">paid<") {
-		t.Fatalf("TR success result page must not expose raw payment status:\n%s", trHTML)
+	if strings.Contains(zhHTML, ">paid<") {
+		t.Fatalf("zh-CN success result page must not expose raw payment status:\n%s", zhHTML)
 	}
 }
 
@@ -1845,10 +1893,10 @@ func TestCheckoutSuccessReturnUsesMatchedDonationAmountAndAssetLogo(t *testing.T
 		MatchedAmountRaw: "1230000000000000000",
 	}
 	repo := &fakePaymentSessionRepo{sessions: []*models.PaymentSession{session}}
-	app := fiber.New(fiber.Config{Views: fiberhtml.New("../../views", ".html")})
+	app := fiber.New(fiber.Config{Views: newHandlerTestViews()})
 	app.Get("/checkout/:token/return/success", HandleCheckoutSuccessReturn(PaymentHandlerDeps{PaymentRepo: repo}))
 
-	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/checkout/donation-paid-token/return/success?lang=tr", nil))
+	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/checkout/donation-paid-token/return/success", nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1862,23 +1910,20 @@ func TestCheckoutSuccessReturnUsesMatchedDonationAmountAndAssetLogo(t *testing.T
 		"1.23 ETH",
 		"/static/coins/eth.svg",
 		"Ethereum",
-		"Dekont yazdır",
+		"打印回执",
 		"crypto-checkmark-path",
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("donation success result missing %q in:\n%s", want, html)
 		}
 	}
-	if strings.Contains(html, "Ödeyen belirler") || strings.Contains(html, "Payer decides") {
+	if strings.Contains(html, "由付款方决定") || strings.Contains(html, "Payer decides") {
 		t.Fatalf("donation success result must show matched amount, not payer-decides copy:\n%s", html)
 	}
 }
 
 func TestPayTemplateRendersStateCopyAndContractFields(t *testing.T) {
-	tmpl, err := template.ParseFiles("../../views/gateway/pay.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tmpl := parseBuyerTemplate(t, "../../views/gateway/pay.html")
 	chainID := constants.Ethereum
 	txHash := "0xabc"
 	session := models.PaymentSession{
@@ -1896,18 +1941,17 @@ func TestPayTemplateRendersStateCopyAndContractFields(t *testing.T) {
 	}
 	state := checkoutPayerState(session, time.Now())
 	var rendered bytes.Buffer
-	err = tmpl.Execute(&rendered, fiber.Map{
+	err := tmpl.Execute(&rendered, fiber.Map{
 		"Session":       &session,
-		"Lang":          "en",
-		"IsEnglish":     true,
+		"Locale":        localization.EN,
 		"QRCodeURL":     "/checkout/checkout-token/qr.png",
 		"PaymentURI":    paymentURI(session),
 		"ChainName":     constants.ChainName(chainID),
 		"AmountDisplay": formatPaymentAmount(session.ExpectedAmountRaw, session.SelectedDecimals, session.SelectedSymbol),
 		"CheckoutState": state,
 		"StatusMode":    state.Mode,
-		"StatusTitle":   state.TitleEN,
-		"StatusBody":    state.BodyEN,
+		"StatusTitle":   localization.T(localization.EN, state.Title),
+		"StatusBody":    localization.T(localization.EN, state.Body),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1937,23 +1981,22 @@ func TestPayTemplateRendersStateCopyAndContractFields(t *testing.T) {
 	terminal := checkoutPaymentState{
 		Status:   checkoutStateUnderpaid,
 		Mode:     "underpaid",
-		TitleEN:  "Underpaid",
-		BodyEN:   "The received amount is below the expected amount.",
+		Title:    "Underpaid",
+		Body:     "The received amount is below the expected amount.",
 		Terminal: true,
 	}
 	rendered.Reset()
 	err = tmpl.Execute(&rendered, fiber.Map{
 		"Session":       &session,
-		"Lang":          "en",
-		"IsEnglish":     true,
+		"Locale":        localization.EN,
 		"QRCodeURL":     "/checkout/checkout-token/qr.png",
 		"PaymentURI":    paymentURI(session),
 		"ChainName":     constants.ChainName(chainID),
 		"AmountDisplay": formatPaymentAmount(session.ExpectedAmountRaw, session.SelectedDecimals, session.SelectedSymbol),
 		"CheckoutState": terminal,
 		"StatusMode":    terminal.Mode,
-		"StatusTitle":   terminal.TitleEN,
-		"StatusBody":    terminal.BodyEN,
+		"StatusTitle":   localization.T(localization.EN, terminal.Title),
+		"StatusBody":    localization.T(localization.EN, terminal.Body),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2078,21 +2121,18 @@ func TestCheckoutResultAmountDisplayDoesNotPresentExpectedAmountAsPaid(t *testin
 }
 
 func TestPaymentResultTemplateRendersCopyableReceiptReferences(t *testing.T) {
-	tmpl, err := template.ParseFiles("../../views/gateway/payment_result.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tmpl := parseBuyerTemplate(t, "../../views/gateway/payment_result.html")
 	var rendered bytes.Buffer
-	err = tmpl.Execute(&rendered, fiber.Map{
+	err := tmpl.Execute(&rendered, fiber.Map{
 		"Title":                "Payment complete",
 		"Message":              "Payment received successfully.",
 		"Status":               models.PaymentStatusPaid,
 		"StatusLabel":          "Completed",
 		"ResultKind":           "success",
-		"IsEnglish":            true,
-		"CheckoutURL":          "/checkout/result-token?lang=en",
-		"LangTRURL":            "/checkout/result-token?lang=tr",
-		"LangENURL":            "/checkout/result-token?lang=en",
+		"Locale":               localization.EN,
+		"SwitchURLZH":          "/checkout/result-token?lang=zh-CN",
+		"SwitchURLEN":          "/checkout/result-token?lang=en",
+		"CheckoutURL":          "/checkout/result-token",
 		"OrderID":              "order-1",
 		"AmountDisplay":        "10 ETH",
 		"Currency":             "USD",
@@ -2109,7 +2149,7 @@ func TestPaymentResultTemplateRendersCopyableReceiptReferences(t *testing.T) {
 	}
 	html := rendered.String()
 	for _, want := range []string{
-		"Gateway Pay",
+		"PayHarbor",
 		"crypto-payment-result-page crypto-flow-select",
 		"crypto-lang-switch",
 		"crypto-result-panel",
@@ -2129,7 +2169,7 @@ func TestPaymentResultTemplateRendersCopyableReceiptReferences(t *testing.T) {
 		`src="/assets/checkout.js"`,
 		`data-language-open`,
 		`data-language-dialog`,
-		"/checkout/result-token?lang=tr",
+		"/checkout/result-token?lang=zh-CN",
 		"order-1",
 		"10 ETH",
 		"ETH",
@@ -2174,10 +2214,12 @@ func TestPaymentInvoiceUsesCheckoutQualityBranding(t *testing.T) {
 		Description: "Premium subscription",
 		LogoURL:     "/uploads/product-logo.svg",
 	}}
-	app := fiber.New(fiber.Config{Views: fiberhtml.New("../../views", ".html")})
+	app := fiber.New(fiber.Config{Views: newHandlerTestViews()})
 	app.Get("/invoice/:token", HandlePaymentInvoice(PaymentHandlerDeps{PaymentRepo: repo, ProductRepo: productRepo}))
 
-	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/invoice/invoice-token", nil))
+	invoiceReq := httptest.NewRequest(http.MethodGet, "/invoice/invoice-token", nil)
+	invoiceReq.AddCookie(&http.Cookie{Name: localization.CookieName, Value: "en"})
+	resp, err := app.Test(invoiceReq)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2197,13 +2239,13 @@ func TestPaymentInvoiceUsesCheckoutQualityBranding(t *testing.T) {
 		"Research Cave Annual",
 		"Premium subscription",
 		"invoice-status paid",
-		"Tamamlandı",
+		"Completed",
 		"77 USD",
 		"invoice-coin-mark",
 		"/static/coins/avax.svg",
 		"AVAX · Avalanche",
-		"Yazdır / PDF",
-		"Linki kopyala",
+		"Print / PDF",
+		"Copy link",
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("invoice page missing %q in:\n%s", want, html)
@@ -2237,10 +2279,12 @@ func TestPaymentInvoiceUsesGatewayBrandFallbackWhenProductLogoMissing(t *testing
 		Name:        "Demo Product",
 		Description: "Logo missing",
 	}}
-	app := fiber.New(fiber.Config{Views: fiberhtml.New("../../views", ".html")})
+	app := fiber.New(fiber.Config{Views: newHandlerTestViews()})
 	app.Get("/invoice/:token", HandlePaymentInvoice(PaymentHandlerDeps{PaymentRepo: repo, ProductRepo: productRepo}))
 
-	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/invoice/invoice-token", nil))
+	invoiceReq := httptest.NewRequest(http.MethodGet, "/invoice/invoice-token", nil)
+	invoiceReq.AddCookie(&http.Cookie{Name: localization.CookieName, Value: "en"})
+	resp, err := app.Test(invoiceReq)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2258,7 +2302,7 @@ func TestPaymentInvoiceUsesGatewayBrandFallbackWhenProductLogoMissing(t *testing
 		`<svg viewBox="0 0 24 24">`,
 		`M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z`,
 		"Demo Product",
-		"Ödeme bekleniyor",
+		"Waiting for payment",
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("invoice page missing %q in:\n%s", want, html)
@@ -2277,7 +2321,7 @@ func TestCheckoutReceiptRefsArePayerSafe(t *testing.T) {
 		OrderID:      "order-1",
 		TxHash:       &txHash,
 	}
-	refs := checkoutReceiptRefs(session)
+	refs := checkoutReceiptRefs(session, localization.EN)
 	if len(refs) != 4 {
 		t.Fatalf("receipt refs = %#v, want four safe refs", refs)
 	}
@@ -2292,13 +2336,22 @@ func TestCheckoutReceiptRefsArePayerSafe(t *testing.T) {
 			t.Fatalf("receipt refs leaked forbidden field %q: %#v", forbidden, refs)
 		}
 	}
+
+	// The labels follow the request locale: a Chinese buyer must not read English labels.
+	zhRefs := checkoutReceiptRefs(session, localization.ZHCN)
+	zhJoined := fmt.Sprint(zhRefs)
+	for _, want := range []string{"支付 ID", "跟踪 ID", "订单号", "交易", "track-1", "order-1", "0xabc"} {
+		if !strings.Contains(zhJoined, want) {
+			t.Fatalf("zh-CN receipt refs missing %q: %#v", want, zhRefs)
+		}
+	}
+	if strings.Contains(zhJoined, "Payment ID") || strings.Contains(zhJoined, "Track ID") {
+		t.Fatalf("zh-CN receipt refs still carry English labels: %#v", zhRefs)
+	}
 }
 
 func TestPayTemplateRendersDonationWithoutExactAmount(t *testing.T) {
-	tmpl, err := template.ParseFiles("../../views/gateway/pay.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tmpl := parseBuyerTemplate(t, "../../views/gateway/pay.html")
 	chainID := constants.Ethereum
 	session := models.PaymentSession{
 		SessionToken:      "donation-token",
@@ -2313,10 +2366,9 @@ func TestPayTemplateRendersDonationWithoutExactAmount(t *testing.T) {
 	}
 	state := checkoutPayerState(session, time.Now())
 	var rendered bytes.Buffer
-	err = tmpl.Execute(&rendered, fiber.Map{
+	err := tmpl.Execute(&rendered, fiber.Map{
 		"Session":        &session,
-		"Lang":           "en",
-		"IsEnglish":      true,
+		"Locale":         localization.EN,
 		"IsDonation":     true,
 		"QRCodeURL":      "/checkout/donation-token/qr.png",
 		"PaymentURI":     paymentURI(session),
@@ -2324,24 +2376,24 @@ func TestPayTemplateRendersDonationWithoutExactAmount(t *testing.T) {
 		"AmountDisplay":  "ETH",
 		"CheckoutState":  state,
 		"StatusMode":     state.Mode,
-		"StatusTitle":    state.TitleEN,
-		"StatusBody":     state.BodyEN,
-		"CheckoutURL":    "/checkout/donation-token?lang=en",
-		"ChangeAssetURL": "/checkout/donation-token/change?lang=en",
-		"CancelURL":      "/checkout/donation-token/cancel?lang=en",
-		"LangTRURL":      "/checkout/donation-token/pay?lang=tr",
-		"LangENURL":      "/checkout/donation-token/pay?lang=en",
+		"StatusTitle":    localization.T(localization.EN, state.Title),
+		"StatusBody":     localization.T(localization.EN, state.Body),
+		"CheckoutURL":    "/checkout/donation-token",
+		"ChangeAssetURL": "/checkout/donation-token/change",
+		"CancelURL":      "/checkout/donation-token/cancel",
+		"SwitchURLZH":    "/checkout/donation-token?lang=zh-CN",
+		"SwitchURLEN":    "/checkout/donation-token?lang=en",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	html := rendered.String()
-	for _, want := range []string{"Chosen amount ETH", "Send your chosen amount", "Choose the amount in your wallet", "No expiry", "crypto-lang-switch", "crypto-lang-options", "crypto-lang-flag", "crypto-lang-name", `aria-current="page"`, `href="/checkout/donation-token?lang=en"`, `method="post" action="/checkout/donation-token/change?lang=en"`, `method="post" action="/checkout/donation-token/cancel?lang=en"`, "/checkout/donation-token/pay?lang=tr", "ethereum:0x2222222222222222222222222222222222222222@1"} {
+	for _, want := range []string{"Chosen amount ETH", "Send your chosen amount", "Choose the amount in your wallet", "No expiry", "crypto-lang-switch", "crypto-lang-options", "crypto-lang-flag", "crypto-lang-name", `aria-current="page"`, `href="/checkout/donation-token"`, `method="post" action="/checkout/donation-token/change"`, `method="post" action="/checkout/donation-token/cancel"`, `href="/checkout/donation-token?lang=zh-CN"`, "ethereum:0x2222222222222222222222222222222222222222@1"} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("donation template missing %q in:\n%s", want, html)
 		}
 	}
-	for _, forbidden := range []string{"Exact amount", "Send exactly", "?value=", "amount=", "0 ETH", "data-countdown-unix", "crypto-progress-bar", `href="/checkout/donation-token/change?lang=en"`, `href="/checkout/donation-token/cancel?lang=en"`} {
+	for _, forbidden := range []string{"Exact amount", "Send exactly", "?value=", "amount=", "0 ETH", "data-countdown-unix", "crypto-progress-bar", `href="/checkout/donation-token/change"`, `href="/checkout/donation-token/cancel"`} {
 		if strings.Contains(html, forbidden) {
 			t.Fatalf("donation template contains fixed amount copy %q in:\n%s", forbidden, html)
 		}
@@ -2349,11 +2401,11 @@ func TestPayTemplateRendersDonationWithoutExactAmount(t *testing.T) {
 }
 
 func TestCheckoutLocalizedURLPreservesLanguageAndSelectedAsset(t *testing.T) {
-	if got := checkoutLocalizedURL("token-1", "", "en", "eth"); got != "/checkout/token-1?asset=ETH&lang=en" {
+	if got := checkoutURL("token-1", "", "eth"); got != "/checkout/token-1?asset=ETH" {
 		t.Fatalf("localized checkout url = %q", got)
 	}
-	if got := checkoutLocalizedURL("token-1", "/pay", "tr", "eth"); got != "/checkout/token-1/pay?lang=tr" {
-		t.Fatalf("localized pay url = %q", got)
+	if got := checkoutURL("token-1", "/pay", "eth"); got != "/checkout/token-1/pay" {
+		t.Fatalf("checkoutURL() = %q, want the bare pay path without a language parameter", got)
 	}
 }
 

@@ -1,3 +1,11 @@
+// buyerCopy resolves a browser string from the server-rendered i18n bundle (through
+// portal-i18n.js, which the buyer pages load before this script) and falls back to the
+// English source text when that runtime is unavailable, so a failed asset load degrades
+// to English instead of breaking the checkout.
+function buyerCopy(key) {
+  return typeof portalT === 'function' ? portalT(key) : key;
+}
+
 document.addEventListener('DOMContentLoaded', function () {
   document.body.classList.add('checkout-ready');
 
@@ -54,7 +62,7 @@ document.addEventListener('DOMContentLoaded', function () {
         return;
       }
       var original = button.getAttribute('data-copy-original-html') || button.innerHTML;
-      var copiedLabel = document.documentElement.lang === 'tr' ? 'Kopyalandı' : 'Copied';
+      var copiedLabel = buyerCopy('Copied');
       button.setAttribute('data-copy-original-html', original);
       button.classList.add('is-copied');
       button.innerText = copiedLabel;
@@ -265,10 +273,9 @@ document.addEventListener('DOMContentLoaded', function () {
     var tokenSearch = picker.querySelector('[data-token-search]');
     var clearTokenButton = picker.querySelector('[data-clear-token]');
     var tokenStageTitle = picker.querySelector('[data-token-stage-title]');
-    var isTurkish = document.documentElement.lang === 'tr';
-    var defaultTokenTitle = isTurkish ? 'Coin seç' : 'Choose coin';
-    var defaultNetworkLabel = isTurkish ? 'Coin bekleniyor' : 'Waiting for coin';
-    var selectNetworkTitle = isTurkish ? 'Ağ seç' : 'Select network';
+    var defaultTokenTitle = buyerCopy('Choose coin');
+    var defaultNetworkLabel = buyerCopy('Waiting for coin');
+    var selectNetworkTitle = buyerCopy('Select network');
 
     function normalized(value) {
       return String(value || '').trim().toUpperCase();

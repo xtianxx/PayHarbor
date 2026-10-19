@@ -2,6 +2,20 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"flag"
+	"fmt"
+	"log"
+	"math/big"
+	"os"
+	"os/signal"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
 	apiHandlers "core/api/handlers"
 	"core/api/routes"
 	"core/asset"
@@ -26,19 +40,6 @@ import (
 	solListener "core/workers/listeners/solana"
 	tronListener "core/workers/listeners/tron"
 	"core/workers/supervisor"
-	"crypto/sha256"
-	"encoding/hex"
-	"errors"
-	"flag"
-	"fmt"
-	"log"
-	"math/big"
-	"os"
-	"os/signal"
-	"strconv"
-	"strings"
-	"syscall"
-	"time"
 
 	coreApplication "core/application"
 	coreHelpers "core/helpers"
@@ -136,8 +137,10 @@ func outboundTransactionInterval() time.Duration {
 	return interval
 }
 
-const sweepJobExecutionTimeout = 90 * time.Second
-const outboundTransactionExecutionTimeout = 90 * time.Second
+const (
+	sweepJobExecutionTimeout            = 90 * time.Second
+	outboundTransactionExecutionTimeout = 90 * time.Second
+)
 
 func sweepJobLockTimeout() time.Duration {
 	minimum := sweepJobExecutionTimeout + 30*time.Second
@@ -370,14 +373,39 @@ func logStartupTask(name string, fn func()) {
 	log.Printf("Startup:%s:END duration=%s\n", name, time.Since(startedAt).Round(time.Millisecond))
 }
 
-func buildGatewayWorkerSupervisor(notifier *webhooksvc.Notifier) (*supervisor.Supervisor, error) {
+// buildGatewayWorkerSupervisor registers the periodic workers. Offline mode
+// (helpers.OfflineModeEnabled) intentionally registers none of them: the
+// supervisor still exists so startup/shutdown stay symmetrical, but no
+// chain-event, money-movement, or webhook-delivery loop runs.
+func buildGatewayWorkerSupervisor(notifier *webhooksvc.Notifier, offline bool) (*supervisor.Supervisor, error) {
 	s := supervisor.New(supervisor.Options{
 		RestartDelay: time.Second,
 		OnError: func(event supervisor.TaskError) {
 			log.Printf("Worker supervisor task=%s restarting=%v error=%v\n", event.Name, event.Restarting, event.Err)
 		},
 	})
-	for _, task := range []supervisor.Task{
+	tasks := gatewayPeriodicWorkerTasks(notifier)
+	if offline {
+		names := make([]string, 0, len(tasks))
+		for _, task := range tasks {
+			names = append(names, task.Name)
+		}
+		log.Printf("Offline mode: %d periodic money/event workers are not registered (%s)\n", len(tasks), strings.Join(names, ", "))
+		return s, nil
+	}
+	for _, task := range tasks {
+		if err := s.Add(task); err != nil {
+			return nil, fmt.Errorf("register supervised worker %q: %w", task.Name, err)
+		}
+	}
+	return s, nil
+}
+
+// gatewayPeriodicWorkerTasks is the authoritative list of periodic tasks that
+// touch chain events, money movement, or webhook delivery. Removing or adding a
+// task here changes both the default and the offline runtime contract.
+func gatewayPeriodicWorkerTasks(notifier *webhooksvc.Notifier) []supervisor.Task {
+	return []supervisor.Task{
 		supervisedWorker("webhook-retry", func(ctx context.Context) { startWebhookRetryWorker(ctx, notifier) }),
 		supervisedWorker("session-expiry", startSessionExpiryWorker),
 		supervisedWorker("transaction-finality", func(ctx context.Context) { startTransactionFinalityWorker(ctx, notifier) }),
@@ -387,12 +415,7 @@ func buildGatewayWorkerSupervisor(notifier *webhooksvc.Notifier) (*supervisor.Su
 		supervisedWorker("reconciliation", startReconciliationWorker),
 		supervisedWorker("transfer-finalization", startTransferFinalizationWorker),
 		supervisedWorker("provider-health", startProviderHealthWorker),
-	} {
-		if err := s.Add(task); err != nil {
-			return nil, fmt.Errorf("register supervised worker %q: %w", task.Name, err)
-		}
 	}
-	return s, nil
 }
 
 func supervisedWorker(name string, run func(context.Context)) supervisor.Task {
@@ -928,56 +951,42 @@ func processOutboundTransactions(ctx context.Context) {
 			log.Printf("Outbound transaction failed id=%s resource=%s/%s: %v\n", outbound.ID, outbound.ResourceType, outbound.ResourceID, err)
 		}
 	}
+
+	// A6: rows whose broadcast outcome is unknown are never sent again. They are
+	// claimed separately and routed to the operator/reconciliation path, which
+	// preserves crash recovery without a second automatic broadcast.
+	recoveryRows, recoveryErr := router.OutboundTransactionRepo.ClaimUncertainForRecovery(ctx, []string{models.OutboundResourceWithdrawal, models.OutboundResourceRefund}, 25, outboundTransactionLockTimeout())
+	if recoveryErr != nil {
+		log.Println("Outbound recovery claim error:", recoveryErr)
+		return
+	}
+	for _, uncertain := range recoveryRows {
+		uncertainErr := errors.New("broadcast_attempted outbound requires operator reconciliation before any re-send")
+		if err := router.OutboundTransactionRepo.MarkBroadcastRecoveryRequired(ctx, uncertain.ID, uncertainErr.Error()); err != nil {
+			log.Printf("Outbound recovery mark error id=%s resource=%s/%s: %v\n", uncertain.ID, uncertain.ResourceType, uncertain.ResourceID, err)
+			continue
+		}
+		openOutboundLifecycleReconciliation(ctx, router.ReconciliationRepo, uncertain.ChainName, uncertain.MerchantID, uncertain.DomainID, uncertain.ResourceType, uncertain.ResourceID.String(), models.OutboundStatusBroadcastAttempted, "outbound_broadcast_attempt_recovered", uncertainErr, uncertain.TxHash)
+		log.Printf("Outbound recovery: id=%s resource=%s/%s moved to operator action\n", uncertain.ID, uncertain.ResourceType, uncertain.ResourceID)
+	}
 }
 
-func executeOutboundTransaction(ctx context.Context, outbound models.OutboundTransaction) error {
-	router := coreApplication.CORE.Router
-	if outbound.Status == models.OutboundStatusBroadcastAttempted && strings.TrimSpace(outbound.TxHash) == "" {
-		err := errors.New("recovered broadcast_attempted outbound without persisted tx hash")
-		err = joinLoggedPersistenceError(err, "mark outbound broadcast recovery required", router.OutboundTransactionRepo.MarkNeedsOperatorAction(ctx, outbound.ID, "broadcast_recovery_required", err.Error()))
-		openOutboundLifecycleReconciliation(ctx, router.ReconciliationRepo, outbound.ChainName, outbound.MerchantID, outbound.DomainID, outbound.ResourceType, outbound.ResourceID.String(), outbound.Status, "outbound_broadcast_attempt_recovered", err, outbound.TxHash)
-		return err
-	}
-	if err := networkops.RequireWithdrawals(ctx, router.NetworkOperationalStateRepo, outbound.ChainID); err != nil {
-		deferErr := router.OutboundTransactionRepo.DeferForNetworkState(ctx, outbound.ID, err.Error(), 30*time.Second)
-		return errors.Join(err, deferErr)
-	}
+// outboundSendFunc is the signer/chain boundary for one granted outbound
+// broadcast. Production keeps the authentic reserved-transfer handler; tests
+// replace it to observe exactly which persisted snapshot reaches that boundary.
+var outboundSendFunc = apiHandlers.ExecuteReservedWalletTransfer
 
-	wallet, err := router.WalletRepo.FindByID(ctx, outbound.WalletID)
-	if err != nil {
-		err = joinLoggedPersistenceError(err, "mark outbound failed after wallet lookup", router.OutboundTransactionRepo.MarkFailed(ctx, outbound.ID, err, 30*time.Second))
-		return err
-	}
-	sourceAddress := repositories.WalletAddressForChainID(*wallet, outbound.ChainID)
-	if strings.TrimSpace(sourceAddress) == "" {
-		err := fmt.Errorf("wallet %s has no address for chain %d", outbound.WalletID, outbound.ChainID)
-		err = joinLoggedPersistenceError(err, "mark outbound missing source address", router.OutboundTransactionRepo.MarkNeedsOperatorAction(ctx, outbound.ID, "missing_source_address", err.Error()))
-		return err
-	}
-
-	reservation, _, err := router.OutboundTransactionRepo.ReserveSequence(ctx, outbound, sourceAddress, outboundTransactionLockTimeout())
-	if err != nil {
-		err = joinLoggedPersistenceError(err, "mark outbound failed after reservation error", router.OutboundTransactionRepo.MarkFailed(ctx, outbound.ID, err, 30*time.Second))
-		return err
-	}
-	// Re-read the persisted mode at the last safe point before recording a
-	// broadcast attempt. This closes the preparation window where an admin may
-	// have disabled withdrawals after the worker's initial guard.
-	if err := networkops.RequireWithdrawals(ctx, router.NetworkOperationalStateRepo, outbound.ChainID); err != nil {
-		err = joinLoggedPersistenceError(err, "release outbound resource after network state changed", router.OutboundTransactionRepo.ReleaseResource(ctx, reservation.ID))
-		err = joinLoggedPersistenceError(err, "defer outbound after network state changed", router.OutboundTransactionRepo.DeferForNetworkState(ctx, outbound.ID, err.Error(), 30*time.Second))
-		return err
-	}
-
-	if err := router.OutboundTransactionRepo.MarkBroadcastAttempted(ctx, outbound.ID); err != nil {
-		return joinLoggedPersistenceError(err, "release outbound resource after broadcast-attempt persistence error", router.OutboundTransactionRepo.ReleaseResource(ctx, reservation.ID))
-	}
-
+// outboundTransferParams builds the signer request from one persisted outbound
+// row. The same builder feeds pre-grant validation and the post-grant send, so
+// validation and broadcast can never describe different intents: the grant
+// transaction refuses the send if the persisted row no longer matches the
+// snapshot that was validated.
+func outboundTransferParams(ctx context.Context, outbound models.OutboundTransaction) types.TransferParams {
 	walletID := outbound.WalletID.String()
 	chain := outbound.ChainName
 	amountRaw := outbound.AmountRaw
 	toAddress := outbound.ToAddress
-	params := types.TransferParams{
+	return types.TransferParams{
 		Context:       ctx,
 		WalletID:      &walletID,
 		Chain:         &chain,
@@ -988,24 +997,122 @@ func executeOutboundTransaction(ctx context.Context, outbound models.OutboundTra
 		JobID:         outbound.ID.String(),
 		CorrelationID: outbound.CorrelationID,
 	}
-	if err := params.ValidateWithdraw(); err != nil {
-		err = joinLoggedPersistenceError(err, "release outbound resource after validation error", router.OutboundTransactionRepo.ReleaseResource(ctx, reservation.ID))
-		err = joinLoggedPersistenceError(err, "mark outbound resource failed after validation error", markOutboundResourceFailedBeforeBroadcast(ctx, outbound, err))
-		err = joinLoggedPersistenceError(err, "mark outbound validation failure for operator", router.OutboundTransactionRepo.MarkNeedsOperatorAction(ctx, outbound.ID, "validation_failed", err.Error()))
+}
+
+// blockOutboundExecution routes a refused or non-sendable outbound to the
+// operator path. It never releases a chain resource: a refused caller holds none,
+// and rows carrying hard evidence are left untouched for reconciliation.
+func blockOutboundExecution(ctx context.Context, row models.OutboundTransaction, reason string, hardEvidence bool) error {
+	router := coreApplication.CORE.Router
+	blockedErr := fmt.Errorf("outbound execution blocked: %s", reason)
+	log.Printf("Outbound execution blocked id=%s resource=%s/%s reason=%s hard_evidence=%v\n", row.ID, row.ResourceType, row.ResourceID, reason, hardEvidence)
+	openOutboundLifecycleReconciliation(ctx, router.ReconciliationRepo, row.ChainName, row.MerchantID, row.DomainID, row.ResourceType, row.ResourceID.String(), row.Status, "outbound_execution_blocked", blockedErr, row.TxHash)
+	if hardEvidence {
+		return nil
+	}
+	return router.OutboundTransactionRepo.MarkNeedsOperatorAction(ctx, row.ID, "outbound_execution_blocked", blockedErr.Error())
+}
+
+func executeOutboundTransaction(ctx context.Context, claimed models.OutboundTransaction) error {
+	router := coreApplication.CORE.Router
+	if claimed.Status == models.OutboundStatusBroadcastAttempted && strings.TrimSpace(claimed.TxHash) == "" {
+		err := errors.New("recovered broadcast_attempted outbound without persisted tx hash")
+		err = joinLoggedPersistenceError(err, "mark outbound broadcast recovery required", router.OutboundTransactionRepo.MarkNeedsOperatorAction(ctx, claimed.ID, "broadcast_recovery_required", err.Error()))
+		openOutboundLifecycleReconciliation(ctx, router.ReconciliationRepo, claimed.ChainName, claimed.MerchantID, claimed.DomainID, claimed.ResourceType, claimed.ResourceID.String(), claimed.Status, "outbound_broadcast_attempt_recovered", err, claimed.TxHash)
+		return err
+	}
+	if err := networkops.RequireWithdrawals(ctx, router.NetworkOperationalStateRepo, claimed.ChainID); err != nil {
+		deferErr := router.OutboundTransactionRepo.DeferForNetworkState(ctx, claimed.ID, err.Error(), 30*time.Second)
+		return errors.Join(err, deferErr)
+	}
+
+	// A6-R1: fast, unlocked pre-check on the persisted row. It routes obvious
+	// cases (settled, uncertain or terminal rows) and yields the current snapshot;
+	// it never authorises a send, because the atomic send grant below re-verifies
+	// row and resource under locks.
+	persisted, blockReason, hardEvidence, inspectErr := router.OutboundTransactionRepo.InspectSendableForExecution(ctx, claimed.ID)
+	if inspectErr != nil {
+		return inspectErr
+	}
+	if blockReason != "" {
+		if persisted == nil {
+			blockedErr := fmt.Errorf("outbound execution blocked: %s", blockReason)
+			log.Printf("Outbound execution blocked id=%s reason=%s (persisted row missing)\n", claimed.ID, blockReason)
+			openOutboundLifecycleReconciliation(ctx, router.ReconciliationRepo, claimed.ChainName, claimed.MerchantID, claimed.DomainID, claimed.ResourceType, claimed.ResourceID.String(), claimed.Status, "outbound_execution_blocked", blockedErr, claimed.TxHash)
+			return nil
+		}
+		return blockOutboundExecution(ctx, *persisted, blockReason, hardEvidence)
+	}
+
+	// Everything below works from the persisted row, never from the claim.
+	wallet, err := router.WalletRepo.FindByID(ctx, persisted.WalletID)
+	if err != nil {
+		err = joinLoggedPersistenceError(err, "mark outbound failed after wallet lookup", router.OutboundTransactionRepo.MarkFailed(ctx, persisted.ID, err, 30*time.Second))
+		return err
+	}
+	sourceAddress := repositories.WalletAddressForChainID(*wallet, persisted.ChainID)
+	if strings.TrimSpace(sourceAddress) == "" {
+		err := fmt.Errorf("wallet %s has no address for chain %d", persisted.WalletID, persisted.ChainID)
+		err = joinLoggedPersistenceError(err, "mark outbound missing source address", router.OutboundTransactionRepo.MarkNeedsOperatorAction(ctx, persisted.ID, "missing_source_address", err.Error()))
 		return err
 	}
 
-	result, err := apiHandlers.ExecuteReservedWalletTransfer(router.WalletRepo, router.Blockchains(), params, false)
+	params := outboundTransferParams(ctx, *persisted)
+	if err := params.ValidateWithdraw(); err != nil {
+		// Validation is a pure pre-broadcast failure and no chain resource has been
+		// granted yet, so this caller has nothing to release.
+		err = joinLoggedPersistenceError(err, "mark outbound resource failed after validation error", markOutboundResourceFailedBeforeBroadcast(ctx, *persisted, err))
+		err = joinLoggedPersistenceError(err, "mark outbound validation failure for operator", router.OutboundTransactionRepo.MarkNeedsOperatorAction(ctx, persisted.ID, "validation_failed", err.Error()))
+		return err
+	}
+
+	// Re-read the network switch immediately before taking the send right: the
+	// grant is the last safe point and must not be spent while an administrator has
+	// outbound activity disabled for the chain.
+	if err := networkops.RequireWithdrawals(ctx, router.NetworkOperationalStateRepo, persisted.ChainID); err != nil {
+		deferErr := router.OutboundTransactionRepo.DeferForNetworkState(ctx, persisted.ID, err.Error(), 30*time.Second)
+		return errors.Join(err, deferErr)
+	}
+
+	// A6-R1 atomic boundary: one short transaction re-verifies the row and its
+	// linked resource under locks, reserves the chain resource and records the
+	// broadcast attempt. Only the single winning caller receives a grant.
+	grant, blocked, grantErr := router.OutboundTransactionRepo.AcquireSendGrant(ctx, *persisted, sourceAddress, outboundTransactionLockTimeout())
+	if grantErr != nil {
+		// The grant transaction rolled back: no chain resource was handed out, so
+		// this caller may not release anything.
+		return grantErr
+	}
+	if grant == nil {
+		reason := "send_grant_refused"
+		blockedRow := *persisted
+		var hardEvidence bool
+		if blocked != nil {
+			reason = blocked.Reason
+			hardEvidence = blocked.HardEvidence
+			if blocked.Row != nil {
+				blockedRow = *blocked.Row
+			}
+		}
+		return blockOutboundExecution(ctx, blockedRow, reason, hardEvidence)
+	}
+
+	// From here on the granted persisted snapshot is the only source for wallet,
+	// chain, token, amount, destination and signer audit context.
+	granted := grant.Outbound
+	result, err := outboundSendFunc(router.WalletRepo, router.Blockchains(), outboundTransferParams(ctx, granted), false)
 	if err != nil {
 		if repositories.OutboundTransferFailureBroadcastUncertain(err) {
 			errText := "broadcast outcome uncertain: " + err.Error()
-			err = joinLoggedPersistenceError(err, "mark outbound uncertain broadcast for operator", router.OutboundTransactionRepo.MarkNeedsOperatorAction(ctx, outbound.ID, "broadcast_uncertain", errText))
-			openOutboundLifecycleReconciliation(ctx, router.ReconciliationRepo, outbound.ChainName, outbound.MerchantID, outbound.DomainID, outbound.ResourceType, outbound.ResourceID.String(), models.OutboundStatusBroadcastAttempted, "outbound_broadcast_uncertain", err, outbound.TxHash)
+			err = joinLoggedPersistenceError(err, "mark outbound uncertain broadcast for operator", router.OutboundTransactionRepo.MarkNeedsOperatorAction(ctx, granted.ID, "broadcast_uncertain", errText))
+			openOutboundLifecycleReconciliation(ctx, router.ReconciliationRepo, granted.ChainName, granted.MerchantID, granted.DomainID, granted.ResourceType, granted.ResourceID.String(), models.OutboundStatusBroadcastAttempted, "outbound_broadcast_uncertain", err, granted.TxHash)
 			return err
 		}
-		err = joinLoggedPersistenceError(err, "release outbound resource after pre-network failure", router.OutboundTransactionRepo.ReleaseResource(ctx, reservation.ID))
-		err = joinLoggedPersistenceError(err, "mark outbound resource failed before broadcast", markOutboundResourceFailedBeforeBroadcast(ctx, outbound, err))
-		err = joinLoggedPersistenceError(err, "mark outbound pre-network failure for operator", router.OutboundTransactionRepo.MarkNeedsOperatorAction(ctx, outbound.ID, "broadcast_failed_before_network", err.Error()))
+		// Definitively not broadcast: the grant holder is the only caller allowed to
+		// release the chain resource it holds.
+		err = joinLoggedPersistenceError(err, "release granted chain resource after pre-network failure", router.OutboundTransactionRepo.ReleaseResource(ctx, grant.Reservation.ID))
+		err = joinLoggedPersistenceError(err, "mark outbound resource failed before broadcast", markOutboundResourceFailedBeforeBroadcast(ctx, granted, err))
+		err = joinLoggedPersistenceError(err, "mark outbound pre-network failure for operator", router.OutboundTransactionRepo.MarkNeedsOperatorAction(ctx, granted.ID, "broadcast_failed_before_network", err.Error()))
 		return err
 	}
 
@@ -1015,21 +1122,27 @@ func executeOutboundTransaction(ctx context.Context, outbound models.OutboundTra
 	}
 	if txHash == "" {
 		err := errors.New("outbound broadcast missing transaction hash")
-		err = joinLoggedPersistenceError(err, "mark outbound missing transaction hash for operator", router.OutboundTransactionRepo.MarkNeedsOperatorAction(ctx, outbound.ID, "missing_tx_hash", err.Error()))
-		openOutboundLifecycleReconciliation(ctx, router.ReconciliationRepo, outbound.ChainName, outbound.MerchantID, outbound.DomainID, outbound.ResourceType, outbound.ResourceID.String(), models.OutboundStatusBroadcastAttempted, "outbound_missing_tx_hash", err, "")
+		err = joinLoggedPersistenceError(err, "mark outbound missing transaction hash for operator", router.OutboundTransactionRepo.MarkNeedsOperatorAction(ctx, granted.ID, "missing_tx_hash", err.Error()))
+		openOutboundLifecycleReconciliation(ctx, router.ReconciliationRepo, granted.ChainName, granted.MerchantID, granted.DomainID, granted.ResourceType, granted.ResourceID.String(), models.OutboundStatusBroadcastAttempted, "outbound_missing_tx_hash", err, "")
 		return err
 	}
 
-	if err := router.OutboundTransactionRepo.MarkBroadcasted(ctx, outbound.ID, txHash); err != nil {
-		openOutboundLifecycleReconciliation(ctx, router.ReconciliationRepo, outbound.ChainName, outbound.MerchantID, outbound.DomainID, outbound.ResourceType, outbound.ResourceID.String(), models.OutboundStatusBroadcastAttempted, "outbound_mark_broadcasted_failed", err, txHash)
+	if err := router.OutboundTransactionRepo.MarkBroadcasted(ctx, granted.ID, txHash); err != nil {
+		// The recovery loop may have moved this attempt to the operator queue while
+		// the transfer was in flight. Bind the observed hash to this exact attempt so
+		// the evidence survives: no new send right is granted and an existing hash is
+		// never overwritten.
+		backfillErr := router.OutboundTransactionRepo.RecordObservedBroadcastHash(ctx, granted.ID, granted.BroadcastAttemptedAt, txHash)
+		err = joinLoggedPersistenceError(err, "record observed broadcast hash for reconciliation", backfillErr)
+		openOutboundLifecycleReconciliation(ctx, router.ReconciliationRepo, granted.ChainName, granted.MerchantID, granted.DomainID, granted.ResourceType, granted.ResourceID.String(), models.OutboundStatusBroadcastAttempted, "outbound_mark_broadcasted_failed", err, txHash)
 		return err
 	}
 	var consumeErr error
-	if err := router.OutboundTransactionRepo.ConsumeResource(ctx, reservation.ID, txHash); err != nil {
+	if err := router.OutboundTransactionRepo.ConsumeResource(ctx, grant.Reservation.ID, txHash); err != nil {
 		consumeErr = joinLoggedPersistenceError(nil, "consume outbound chain resource", err)
-		openOutboundLifecycleReconciliation(ctx, router.ReconciliationRepo, outbound.ChainName, outbound.MerchantID, outbound.DomainID, outbound.ResourceType, outbound.ResourceID.String(), models.OutboundStatusBroadcasted, "outbound_resource_consume_failed", consumeErr, txHash)
+		openOutboundLifecycleReconciliation(ctx, router.ReconciliationRepo, granted.ChainName, granted.MerchantID, granted.DomainID, granted.ResourceType, granted.ResourceID.String(), models.OutboundStatusBroadcasted, "outbound_resource_consume_failed", consumeErr, txHash)
 	}
-	return errors.Join(consumeErr, recordOutboundBroadcast(ctx, outbound, txHash))
+	return errors.Join(consumeErr, recordOutboundBroadcast(ctx, granted, txHash))
 }
 
 func markOutboundResourceFailedBeforeBroadcast(ctx context.Context, outbound models.OutboundTransaction, err error) error {
@@ -1143,7 +1256,7 @@ func executeAutoSweepDepositWithJob(ctx context.Context, txModel *models.Transac
 			transferErr := fmt.Errorf("sweep token transfer [chain=%d token=%s amount=%s]: %w", txModel.ChainID, *txModel.Token, txModel.Amount, err)
 			return nil, errors.Join(transferErr, handleSweepOutboundFailure(ctx, outboundTx, reservation, err))
 		}
-		if err := recordSweepOutboundBroadcast(ctx, outboundTx, reservation, result); err != nil {
+		if err := recordSweepOutboundBroadcast(ctx, *job, outboundTx, reservation, result); err != nil {
 			return nil, err
 		}
 		return result, nil
@@ -1159,7 +1272,7 @@ func executeAutoSweepDepositWithJob(ctx context.Context, txModel *models.Transac
 		transferErr := fmt.Errorf("sweep native transfer [chain=%d amount=%s]: %w", txModel.ChainID, txModel.Amount, err)
 		return nil, errors.Join(transferErr, handleSweepOutboundFailure(ctx, outboundTx, reservation, err))
 	}
-	if err := recordSweepOutboundBroadcast(ctx, outboundTx, reservation, result); err != nil {
+	if err := recordSweepOutboundBroadcast(ctx, *job, outboundTx, reservation, result); err != nil {
 		return nil, err
 	}
 	return result, nil
@@ -1184,14 +1297,33 @@ func prepareSweepOutbound(ctx context.Context, job models.SweepJob, txModel mode
 	if strings.TrimSpace(sourceAddress) == "" {
 		return outboundTx, nil, fmt.Errorf("sweep source wallet has no address for chain %d", txModel.ChainID)
 	}
-	reservation, _, err := router.OutboundTransactionRepo.ReserveSequence(ctx, *outboundTx, sourceAddress, sweepJobLockTimeout())
+
+	// A10: the sweep send right is granted atomically (job row → outbound → chain
+	// reservation → attempt). A loser or a failed transaction receives no
+	// reservation, so nothing here may release one. The grant's job-hash and
+	// outbound-evidence fences keep expired leases, failed statuses and operator
+	// retries from re-sending.
+	grant, block, err := router.OutboundTransactionRepo.AcquireSweepSendGrant(ctx, job, outboundTx.ID, sourceAddress, sweepJobLockTimeout())
 	if err != nil {
 		return outboundTx, nil, err
 	}
-	if err := router.OutboundTransactionRepo.MarkBroadcastAttempted(ctx, outboundTx.ID); err != nil {
-		return outboundTx, nil, joinLoggedPersistenceError(err, "release sweep resource after broadcast-attempt persistence error", router.OutboundTransactionRepo.ReleaseResource(ctx, reservation.ID))
+	if grant == nil {
+		reason := "sweep_send_grant_refused"
+		hardEvidence := true
+		if block != nil {
+			reason = block.Reason
+			hardEvidence = block.HardEvidence
+		}
+		blockedErr := fmt.Errorf("sweep send grant refused: %s", reason)
+		if hardEvidence {
+			// Evidence (hash/attempt/reconcile/terminal) means the job must stop
+			// automatic sends and wait for operator reconciliation.
+			persistErr := router.SweepJobRepo.MarkNeedsOperatorAction(ctx, job.ID, models.SweepOperatorActionReconcileBroadcast, blockedErr)
+			return outboundTx, nil, errors.Join(blockedErr, persistErr)
+		}
+		return outboundTx, nil, blockedErr
 	}
-	return outboundTx, reservation, nil
+	return &grant.Outbound, &grant.Reservation, nil
 }
 
 func handleSweepOutboundFailure(ctx context.Context, outboundTx *models.OutboundTransaction, reservation *models.OutboundChainResourceReservation, err error) error {
@@ -1199,20 +1331,44 @@ func handleSweepOutboundFailure(ctx context.Context, outboundTx *models.Outbound
 	if router == nil || router.OutboundTransactionRepo == nil || outboundTx == nil {
 		return nil
 	}
-	if sweepFailureBroadcastUncertain(err) {
-		return joinLoggedPersistenceError(nil, "mark uncertain sweep broadcast for operator", router.OutboundTransactionRepo.MarkNeedsOperatorAction(ctx, outboundTx.ID, "broadcast_uncertain", err.Error()))
+	// A10: this helper is only reached after the chain send call returned an error,
+	// so the outcome cannot be proven pre-broadcast from the error text. Keep the
+	// reservation and the hold, and route the outbound to operator reconciliation;
+	// only failures that provably happened before the send may release resources,
+	// and those never reach this helper. reservation is intentionally not released.
+	detail := "sweep broadcast outcome unknown after send error; hold preserved"
+	if err != nil {
+		detail = "sweep broadcast outcome unknown after send error: " + err.Error()
 	}
-	var persistenceErr error
-	if reservation != nil {
-		persistenceErr = joinLoggedPersistenceError(persistenceErr, "release sweep chain resource", router.OutboundTransactionRepo.ReleaseResource(ctx, reservation.ID))
-	}
-	persistenceErr = joinLoggedPersistenceError(persistenceErr, "mark sweep outbound failed", router.OutboundTransactionRepo.MarkFailed(ctx, outboundTx.ID, err, 30*time.Second))
-	return persistenceErr
+	persistErr := router.OutboundTransactionRepo.MarkNeedsOperatorAction(ctx, outboundTx.ID, "broadcast_uncertain", detail)
+	return joinLoggedPersistenceError(fmt.Errorf("%w: %v", errSweepBroadcastOutcomeUnknown, err), "mark uncertain sweep broadcast for operator", persistErr)
 }
 
-func recordSweepOutboundBroadcast(ctx context.Context, outboundTx *models.OutboundTransaction, reservation *models.OutboundChainResourceReservation, result *blockchain.TransactionResult) error {
+// sweepBroadcastRecordError carries the already-observed sweep hash and the attempt
+// identity when its bookkeeping could not be committed, so the worker can persist
+// the evidence (and reconcile with the known hash) instead of pretending the send
+// failed and releasing anything.
+type sweepBroadcastRecordError struct {
+	txHash        string
+	outboundID    uuid.UUID
+	reservationID uuid.UUID
+	err           error
+}
+
+func (e *sweepBroadcastRecordError) Error() string {
+	return fmt.Sprintf("record sweep broadcast hash %s: %v", e.txHash, e.err)
+}
+
+func (e *sweepBroadcastRecordError) Unwrap() error { return e.err }
+
+// errSweepBroadcastOutcomeUnknown marks a post-send failure whose broadcast
+// outcome cannot be proven either way; the worker must route it to reconciliation
+// instead of MarkFailed/release.
+var errSweepBroadcastOutcomeUnknown = errors.New("sweep broadcast outcome unknown")
+
+func recordSweepOutboundBroadcast(ctx context.Context, job models.SweepJob, outboundTx *models.OutboundTransaction, reservation *models.OutboundChainResourceReservation, result *blockchain.TransactionResult) error {
 	router := coreApplication.CORE.Router
-	if router == nil || router.OutboundTransactionRepo == nil || outboundTx == nil {
+	if router == nil || router.SweepJobRepo == nil || outboundTx == nil {
 		return nil
 	}
 	txHash := ""
@@ -1222,11 +1378,17 @@ func recordSweepOutboundBroadcast(ctx context.Context, outboundTx *models.Outbou
 	if txHash == "" {
 		return errors.New("sweep outbound broadcast missing transaction hash")
 	}
-	if err := router.OutboundTransactionRepo.MarkBroadcasted(ctx, outboundTx.ID, txHash); err != nil {
-		return err
+	if reservation == nil {
+		return errors.New("sweep outbound broadcast missing chain reservation")
 	}
-	if reservation != nil {
-		return router.OutboundTransactionRepo.ConsumeResource(ctx, reservation.ID, txHash)
+	// A10: one transaction records the job marker, the broadcasted outbound and the
+	// consumed reservation. It never marks the job succeeded and never releases the
+	// hold; a failure rolls the whole record back and keeps the hash for reconcile.
+	if err := router.SweepJobRepo.RecordSweepBroadcastObserved(ctx, job.ID, outboundTx.ID, reservation.ID, txHash); err != nil {
+		// Both a failed record and a kept terminal decision are handed to the worker,
+		// which persists the same-attempt evidence and reconciliation in one fallback
+		// transaction without touching the decision or the hold.
+		return &sweepBroadcastRecordError{txHash: txHash, outboundID: outboundTx.ID, reservationID: reservation.ID, err: err}
 	}
 	return nil
 }
@@ -1766,7 +1928,7 @@ func bootstrapAdminAccount(ctx context.Context) {
 		}
 		password = rnd
 		passwordFile := ".bootstrap_admin_password"
-		if err := os.WriteFile(passwordFile, []byte(password+"\n"), 0600); err != nil {
+		if err := os.WriteFile(passwordFile, []byte(password+"\n"), 0o600); err != nil {
 			log.Printf("[BOOTSTRAP] ADMIN_PASSWORD not set and generated password file could not be written: %v\n", err)
 			return
 		}
@@ -2001,13 +2163,31 @@ func processSweepJobs(ctx context.Context) {
 		cancel()
 		if err != nil {
 			log.Printf("Sweep job failed job=%s tx=%s: %v\n", job.ID, job.TransactionUniqueHash, err)
+			var recordErr *sweepBroadcastRecordError
+			if errors.As(err, &recordErr) {
+				// A10/A10-R1: the chain broadcast succeeded; only its bookkeeping failed.
+				// Persist the known hash and the reconciliation evidence in one fallback
+				// transaction (never MarkFailed/release), and propagate the failure.
+				fallbackErr := router.SweepJobRepo.RecordSweepBroadcastEvidenceFallback(ctx, job.ID, recordErr.outboundID, recordErr.reservationID, recordErr.txHash)
+				if fallbackErr != nil {
+					log.Printf("Sweep broadcast hash fallback error job=%s tx=%s hash=%s: %v\n", job.ID, job.TransactionUniqueHash, recordErr.txHash, fallbackErr)
+				}
+				enqueueSweepLifecycleWebhook(ctx, job, txModel, constants.WebhookEventSweepDeadLetteredV1, recordErr.Error())
+				continue
+			}
+			if errors.Is(err, repositories.ErrSweepTerminalDecisionKept) {
+				// A late hash arrived after a human/terminal decision: the record path
+				// already stored the evidence and the decision is preserved.
+				log.Printf("Sweep broadcast arrived after a terminal decision job=%s tx=%s: %v\n", job.ID, job.TransactionUniqueHash, err)
+				continue
+			}
 			if networkops.IsUnavailable(err) {
 				if deferErr := router.SweepJobRepo.DeferForNetworkState(ctx, job.ID, err.Error(), 30*time.Second); deferErr != nil {
 					log.Printf("Sweep job network-state defer error job=%s chain=%d: %v\n", job.ID, job.ChainID, deferErr)
 				}
 				continue
 			}
-			if sweepFailureBroadcastUncertain(err) {
+			if sweepFailureBroadcastUncertain(err) || errors.Is(err, errSweepBroadcastOutcomeUnknown) {
 				markSweepBroadcastUncertainAndReconcile(ctx, router, job, txModel, "sweep_broadcast_uncertain", err)
 				continue
 			}
@@ -2036,22 +2216,15 @@ func processSweepJobs(ctx context.Context) {
 			markSweepBroadcastUncertainAndReconcile(ctx, router, job, txModel, "sweep_broadcast_missing_tx_hash", err)
 			continue
 		}
-		if err := router.SweepJobRepo.MarkSucceeded(ctx, job.ID, txHash); err != nil {
-			log.Printf("Sweep job mark succeeded error job=%s: %v\n", job.ID, err)
-			openSweepLedgerReconciliation(ctx, job, txModel, "sweep_mark_succeeded_failed", err)
-			continue
-		}
-		if router.LedgerRepo != nil {
-			if err := router.LedgerRepo.PostSweepRelease(ctx, job, *txModel, txHash); err != nil {
-				log.Printf("Sweep job ledger release error job=%s tx=%s: %v\n", job.ID, job.TransactionUniqueHash, err)
-				openSweepLedgerReconciliation(ctx, job, txModel, "sweep_ledger_release_failed", err)
-			}
-		}
-		job.Status = models.SweepJobStatusSucceeded
+		// A10: a returned hash proves the sweep was broadcast, not that it is final.
+		// The executor already committed the job hash, the dead_letter reconcile
+		// marker, the broadcasted outbound, the consumed reservation and the scoped
+		// reconciliation in one transaction; the ledger hold stays in place until
+		// finality is verified.
+		job.Status = models.SweepJobStatusDeadLetter
 		job.SweepTxHash = txHash
-		job.LastError = ""
-		enqueueSweepLifecycleWebhook(ctx, job, txModel, constants.WebhookEventSweepSucceededV1, "")
-		log.Printf("Sweep job succeeded job=%s tx=%s sweep_tx=%s\n", job.ID, job.TransactionUniqueHash, txHash)
+		job.OperatorAction = models.SweepOperatorActionReconcileBroadcast
+		log.Printf("Sweep job broadcast observed, finality unverified job=%s tx=%s sweep_tx=%s\n", job.ID, job.TransactionUniqueHash, txHash)
 	}
 }
 
@@ -2121,11 +2294,32 @@ func releaseSweepHoldOnPreBroadcastDeadLetter(ctx context.Context, job models.Sw
 	if job.Status != models.SweepJobStatusDeadLetter || strings.TrimSpace(job.SweepTxHash) != "" {
 		return
 	}
+	if coreApplication.CORE == nil || coreApplication.CORE.Router == nil {
+		return
+	}
+	// A10: prove that nothing was broadcast before releasing the hold. Any
+	// attempt/hash/broadcast/finality/reconcile evidence on the job or its outbound
+	// rows — or a missing/unreadable evidence source — keeps the hold; the error text
+	// alone is never sufficient.
+	jobRepo := coreApplication.CORE.Router.SweepJobRepo
+	if jobRepo == nil {
+		openSweepLedgerReconciliation(ctx, job, txModel, "sweep_hold_release_evidence_unreadable", errors.New("sweep job repository unavailable"))
+		return
+	}
+	hasEvidence, reason, evidenceErr := jobRepo.SweepBroadcastEvidence(ctx, job.ID)
+	if evidenceErr != nil {
+		openSweepLedgerReconciliation(ctx, job, txModel, "sweep_hold_release_evidence_unreadable", evidenceErr)
+		return
+	}
+	if hasEvidence {
+		openSweepLedgerReconciliation(ctx, job, txModel, "sweep_dead_letter_broadcast_uncertain", fmt.Errorf("broadcast evidence present: %s", reason))
+		return
+	}
 	if !sweepFailureLikelyBeforeBroadcast(err) {
 		openSweepLedgerReconciliation(ctx, job, txModel, "sweep_dead_letter_broadcast_uncertain", err)
 		return
 	}
-	if coreApplication.CORE == nil || coreApplication.CORE.Router == nil || coreApplication.CORE.Router.LedgerRepo == nil {
+	if coreApplication.CORE.Router.LedgerRepo == nil {
 		return
 	}
 	if releaseErr := coreApplication.CORE.Router.LedgerRepo.VoidSweepHold(ctx, job.ID); releaseErr != nil {
@@ -2779,7 +2973,7 @@ func GetApp() (*coreApplication.App, error) {
 	return NewApp()
 }
 
-// @title Gateway API
+// @title PayHarbor API
 // @version 1.0
 // @description Multi-chain merchant payment gateway API.
 // @BasePath /
@@ -2794,6 +2988,13 @@ func main() {
 	defer cancel()
 
 	_ = godotenv.Load()
+	if err := coreHelpers.OfflineModePolicyError(); err != nil {
+		log.Fatal(err)
+	}
+	offlineMode := coreHelpers.OfflineModeEnabled()
+	if offlineMode {
+		log.Println("Offline mode: GATEWAY_OFFLINE=true with APP_ENV=development; chain listeners and periodic money/event workers stay disabled")
+	}
 	if _, err := signer.RegisterConfiguredCustodyAdapterFromEnv(); err != nil {
 		log.Fatal(err)
 	}
@@ -2829,7 +3030,7 @@ func main() {
 	coreApplication.CORE.Router.TxRescanService.LedgerRepo = coreApplication.CORE.Router.LedgerRepo
 	coreApplication.CORE.Router.TxRescanService.Confirmations = chainConfirmationRequirement
 	webhookNotifier := webhooksvc.NewNotifier()
-	workerSupervisor, err := buildGatewayWorkerSupervisor(webhookNotifier)
+	workerSupervisor, err := buildGatewayWorkerSupervisor(webhookNotifier, offlineMode)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -2839,34 +3040,43 @@ func main() {
 	}
 	addrIndex = addressindex.NewAddressIndex(mainCtx, coreDB.DB)
 	coreApplication.CORE.Router.WalletRepo.SetAddressObserver(addrIndex.AddWallet)
-	var addressBackfillErr error
-	logStartupTask("AddressBackfill", func() {
-		addressBackfillErr = backfillMissingAddresses(mainCtx)
-	})
-	if addressBackfillErr != nil {
-		log.Fatalf("Address backfill failed; refusing to serve without complete chain ownership data: %v", addressBackfillErr)
-	}
-	var addressIndexErr error
-	logStartupTask("AddressIndexLoad", func() {
-		if err := addrIndex.Load(); err != nil {
-			addressIndexErr = err
-			return
+	if offlineMode {
+		log.Println("Offline mode: address backfill and address index preload are skipped (no chain listener consumes the index)")
+	} else {
+		var addressBackfillErr error
+		logStartupTask("AddressBackfill", func() {
+			addressBackfillErr = backfillMissingAddresses(mainCtx)
+		})
+		if addressBackfillErr != nil {
+			log.Fatalf("Address backfill failed; refusing to serve without complete chain ownership data: %v", addressBackfillErr)
 		}
-		if !addrIndex.Ready() {
-			addressIndexErr = errors.New("address index is incomplete; remove ADDRESS_INDEX_PRELOAD_LIMIT or leave it unset")
-			return
+		var addressIndexErr error
+		logStartupTask("AddressIndexLoad", func() {
+			if err := addrIndex.Load(); err != nil {
+				addressIndexErr = err
+				return
+			}
+			if !addrIndex.Ready() {
+				addressIndexErr = errors.New("address index is incomplete; remove ADDRESS_INDEX_PRELOAD_LIMIT or leave it unset")
+				return
+			}
+			log.Println("Address index loaded")
+		})
+		if addressIndexErr != nil {
+			log.Fatalf("Address index unavailable; refusing to serve without chain listeners: %v", addressIndexErr)
 		}
-		log.Println("Address index loaded")
-	})
-	if addressIndexErr != nil {
-		log.Fatalf("Address index unavailable; refusing to serve without chain listeners: %v", addressIndexErr)
 	}
-	if err := startChainInfrastructure(mainCtx, bus, verboseTxLogging); err != nil {
+	if offlineMode {
+		log.Println("Offline mode: chain listeners are NOT started (no RPC dialing, no chain state reads, no listener registration)")
+	} else if err := startChainInfrastructure(mainCtx, bus, verboseTxLogging); err != nil {
 		log.Fatalf("Chain infrastructure failed; refusing to serve without all configured listeners: %v", err)
 	}
 	ensureGatewayWorkerLeaseRows(mainCtx)
 	if err := compositionRoot.WorkerSupervisor.Start(mainCtx); err != nil {
 		log.Fatal(err)
+	}
+	if offlineMode {
+		log.Printf("Offline mode: worker supervisor started with %d periodic tasks\n", len(compositionRoot.WorkerSupervisor.TaskNames()))
 	}
 
 	fiberApp := compositionRoot.App.Router.GetFiber()

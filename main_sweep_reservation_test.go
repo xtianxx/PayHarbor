@@ -1,12 +1,13 @@
 package main
 
 import (
-	"core/models"
 	"errors"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"core/models"
 )
 
 func TestExecuteAutoSweepDepositWithJobUsesReservedTokenAndNativeTronSweep(t *testing.T) {
@@ -221,28 +222,61 @@ func TestFinalizeProcessingTransfersRequiresFinalityEvidence(t *testing.T) {
 	}
 }
 
-func TestProcessSweepJobsRequiresTxHashAndMarksSuccessBeforeRelease(t *testing.T) {
+// A10 contract correction: the worker used to treat "executeSweepJob returned a
+// hash" as success (MarkSucceeded + PostSweepRelease + succeeded event). A hash is
+// broadcast evidence, not finality, so the worker now requires the hash, records
+// the broadcast through the atomic record (job marker + outbound + reservation) and
+// must never mark the job succeeded or release the ledger hold on the broadcast
+// path. The money assertions below (hash required, no release without verified
+// finality, reconciliation instead of an error-swallowing retry) are kept.
+func TestProcessSweepJobsRequiresTxHashAndRecordsBroadcastWithoutRelease(t *testing.T) {
 	sourceBytes, err := os.ReadFile("main.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := extractMainSweepFunctionBody(t, string(sourceBytes), "processSweepJobs")
+	source := string(sourceBytes)
+	body := extractMainSweepFunctionBody(t, source, "processSweepJobs")
 	for _, token := range []string{
 		"sweep broadcast missing transaction hash",
 		"router.SweepJobRepo.MarkFailed(ctx, job.ID, err)",
-		"openSweepLedgerReconciliation(ctx, job, txModel, \"sweep_mark_succeeded_failed\", err)",
+		"broadcast observed, finality unverified",
+		"errors.As(err, &recordErr)",
+		"RecordSweepBroadcastEvidenceFallback",
+		"repositories.ErrSweepTerminalDecisionKept",
 	} {
 		if !strings.Contains(body, token) {
 			t.Fatalf("processSweepJobs missing guard token %q", token)
 		}
 	}
-	successIndex := strings.Index(body, "router.SweepJobRepo.MarkSucceeded(ctx, job.ID, txHash)")
-	releaseIndex := strings.Index(body, "router.LedgerRepo.PostSweepRelease(ctx, job, *txModel, txHash)")
-	if successIndex == -1 || releaseIndex == -1 {
-		t.Fatalf("processSweepJobs missing success/release calls")
+	for _, forbidden := range []string{
+		"router.SweepJobRepo.MarkSucceeded(ctx, job.ID, txHash)",
+		"router.LedgerRepo.PostSweepRelease(ctx, job, *txModel, txHash)",
+		"constants.WebhookEventSweepSucceededV1",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("processSweepJobs must not treat a broadcast hash as finality: %q", forbidden)
+		}
 	}
-	if successIndex > releaseIndex {
-		t.Fatal("processSweepJobs must mark the sweep job succeeded before posting ledger release")
+	executor := extractMainSweepFunctionBody(t, source, "recordSweepOutboundBroadcast")
+	for _, token := range []string{"RecordSweepBroadcastObserved", "sweepBroadcastRecordError"} {
+		if !strings.Contains(executor, token) {
+			t.Fatalf("recordSweepOutboundBroadcast missing token %q", token)
+		}
+	}
+	repoSource, readErr := os.ReadFile("repositories/sweep_job_repo.go")
+	if readErr != nil {
+		t.Fatalf("read sweep job repository: %v", readErr)
+	}
+	for _, token := range []string{"openSweepBroadcastReconciliationWithDB", "sweepBroadcastObservedReason", "CreateScopedOpenIfMissing"} {
+		if !strings.Contains(string(repoSource), token) {
+			t.Fatalf("sweep broadcast record missing same-transaction reconciliation token %q", token)
+		}
+	}
+	releaseFence := extractMainSweepFunctionBody(t, source, "releaseSweepHoldOnPreBroadcastDeadLetter")
+	for _, token := range []string{"SweepBroadcastEvidence", "sweep_hold_release_evidence_unreadable", "sweep_dead_letter_broadcast_uncertain"} {
+		if !strings.Contains(releaseFence, token) {
+			t.Fatalf("releaseSweepHoldOnPreBroadcastDeadLetter missing evidence fence token %q", token)
+		}
 	}
 }
 
@@ -357,9 +391,17 @@ func TestPrepareSweepOutboundRoutesRecoveredBroadcastAttemptToOperatorAction(t *
 		}
 	}
 	recoveryIndex := strings.Index(body, "outboundTx.Status == models.OutboundStatusBroadcastAttempted")
-	reserveIndex := strings.Index(body, "ReserveSequence(ctx, *outboundTx")
-	if recoveryIndex == -1 || reserveIndex == -1 || recoveryIndex > reserveIndex {
-		t.Fatal("recovered sweep broadcast attempts must be routed to operator action before reserving/broadcasting again")
+	grantIndex := strings.Index(body, "AcquireSweepSendGrant(ctx, job, outboundTx.ID")
+	if recoveryIndex == -1 || grantIndex == -1 || recoveryIndex > grantIndex {
+		t.Fatal("recovered sweep broadcast attempts must be routed to operator action before the send grant")
+	}
+	for _, token := range []string{"sweep send grant refused", "models.SweepOperatorActionReconcileBroadcast"} {
+		if !strings.Contains(body, token) {
+			t.Fatalf("prepareSweepOutbound missing refused-grant token %q", token)
+		}
+	}
+	if strings.Contains(body, "ReserveSequence(") || strings.Contains(body, "ReleaseResource(") {
+		t.Fatal("prepareSweepOutbound must use the atomic sweep grant and never release a reservation")
 	}
 }
 
@@ -371,20 +413,20 @@ func TestOutboundTransactionWorkerPersistsHashBeforeLifecycleBroadcastEvent(t *t
 	source := string(sourceBytes)
 	workerBody := extractMainSweepFunctionBody(t, source, "executeOutboundTransaction")
 	for _, token := range []string{
-		"MarkBroadcastAttempted(ctx, outbound.ID)",
-		"apiHandlers.ExecuteReservedWalletTransfer",
-		"MarkBroadcasted(ctx, outbound.ID, txHash)",
-		"ConsumeResource(ctx, reservation.ID, txHash)",
-		"recordOutboundBroadcast(ctx, outbound, txHash)",
+		"AcquireSendGrant(ctx, *persisted",
+		"outboundSendFunc(router.WalletRepo, router.Blockchains()",
+		"MarkBroadcasted(ctx, granted.ID, txHash)",
+		"ConsumeResource(ctx, grant.Reservation.ID, txHash)",
+		"recordOutboundBroadcast(ctx, granted, txHash)",
 		"OutboundTransferFailureBroadcastUncertain(err)",
-		`MarkNeedsOperatorAction(ctx, outbound.ID, "broadcast_uncertain", errText)`,
+		`MarkNeedsOperatorAction(ctx, granted.ID, "broadcast_uncertain", errText)`,
 	} {
 		if !strings.Contains(workerBody, token) {
 			t.Fatalf("executeOutboundTransaction missing durable outbound token %q", token)
 		}
 	}
-	markIndex := strings.Index(workerBody, "MarkBroadcasted(ctx, outbound.ID, txHash)")
-	eventIndex := strings.Index(workerBody, "recordOutboundBroadcast(ctx, outbound, txHash)")
+	markIndex := strings.Index(workerBody, "MarkBroadcasted(ctx, granted.ID, txHash)")
+	eventIndex := strings.Index(workerBody, "recordOutboundBroadcast(ctx, granted, txHash)")
 	if markIndex == -1 || eventIndex == -1 || markIndex > eventIndex {
 		t.Fatal("outbound worker must persist tx hash before lifecycle broadcast events")
 	}

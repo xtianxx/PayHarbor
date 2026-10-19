@@ -22,6 +22,12 @@ var (
 	ErrSweepJobTxHashRequired  = errors.New("sweep transaction hash is required")
 	ErrSweepRecoveryAction     = errors.New("invalid sweep recovery action")
 	ErrSweepRecoveryNoteNeeded = errors.New("sweep recovery note is required")
+	// ErrSweepBroadcastEvidencePresent refuses a retry/claim when the job or its
+	// outbound rows already carry broadcast evidence (A10).
+	ErrSweepBroadcastEvidencePresent = errors.New("sweep job has broadcast evidence; automatic retry is not allowed")
+	// ErrSweepTerminalDecisionKept reports that a late broadcast hash arrived after a
+	// human/terminal decision; the decision is preserved and only evidence is added.
+	ErrSweepTerminalDecisionKept = errors.New("sweep job terminal decision kept")
 )
 
 const (
@@ -125,6 +131,12 @@ func (r *SweepJobRepo) ClaimDue(ctx context.Context, limit int, lockFor time.Dur
 	lockUntil := now.Add(lockFor)
 	var jobs []models.SweepJob
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// A10-R1: candidate selection locks the rows FOR UPDATE and the claim UPDATE in
+		// the same transaction re-verifies the claimable status and the broadcast
+		// fence, so a terminal transition or new broadcast evidence committed by
+		// another transaction can never be reopened from a stale candidate list. The
+		// returned rows keep the pre-claim status (main distinguishes stale processing
+		// recovery by it) and carry the lease this claim actually took.
 		if err := tx.Raw(`
 			WITH ranked_due AS (
 				SELECT
@@ -138,6 +150,23 @@ func (r *SweepJobRepo) ClaimDue(ctx context.Context, limit int, lockFor time.Dur
 				WHERE sj.status IN ?
 				  AND (sj.next_run_at IS NULL OR sj.next_run_at <= ?)
 				  AND (sj.locked_until IS NULL OR sj.locked_until < ?)
+				  AND sj.sweep_tx_hash = ''
+				  AND (sj.operator_action IS NULL OR sj.operator_action <> 'reconcile_broadcast')
+				  AND (sj.failure_category IS NULL OR sj.failure_category <> 'broadcast_uncertain')
+				  AND NOT EXISTS (
+					SELECT 1
+					FROM outbound_transactions o
+					WHERE o.resource_type = 'sweep_job'
+					  AND o.resource_id = sj.id
+					  AND (
+						o.tx_hash <> ''
+						OR o.broadcast_attempted_at IS NOT NULL
+						OR o.broadcasted_at IS NOT NULL
+						OR o.finalized_at IS NOT NULL
+						OR o.status IN ('broadcast_attempted', 'broadcasted', 'confirming', 'finalized')
+						OR (o.status = 'failed' AND lower(btrim(coalesce(o.error_category, ''))) IN ('terminal_failed', 'broadcast_uncertain', 'replacement_requires_operator'))
+					  )
+				  )
 				  AND NOT EXISTS (
 					SELECT 1
 					FROM sweep_jobs active
@@ -177,15 +206,59 @@ func (r *SweepJobRepo) ClaimDue(ctx context.Context, limit int, lockFor time.Dur
 		for _, job := range jobs {
 			ids = append(ids, job.ID)
 		}
-		return tx.Model(&models.SweepJob{}).
-			Where("id IN ?", ids).
-			Updates(map[string]any{
-				"status":       models.SweepJobStatusProcessing,
-				"locked_until": &lockUntil,
-				"updated_at":   now,
-			}).Error
+		var claimed []string
+		if err := tx.Raw(`
+			UPDATE sweep_jobs
+			SET status = 'processing', locked_until = ?, updated_at = ?
+			WHERE id IN ?
+			  AND (status IN ('pending', 'failed') OR (status = 'processing' AND (locked_until IS NULL OR locked_until < ?)))
+			  AND sweep_tx_hash = ''
+			  AND (operator_action IS NULL OR operator_action <> 'reconcile_broadcast')
+			  AND (failure_category IS NULL OR failure_category <> 'broadcast_uncertain')
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM outbound_transactions o
+				WHERE o.resource_type = 'sweep_job'
+				  AND o.resource_id = sweep_jobs.id
+				  AND (
+					o.tx_hash <> ''
+					OR o.broadcast_attempted_at IS NOT NULL
+					OR o.broadcasted_at IS NOT NULL
+					OR o.finalized_at IS NOT NULL
+					OR o.status IN ('broadcast_attempted', 'broadcasted', 'confirming', 'finalized')
+					OR (o.status = 'failed' AND lower(btrim(coalesce(o.error_category, ''))) IN ('terminal_failed', 'broadcast_uncertain', 'replacement_requires_operator'))
+				  )
+			  )
+			RETURNING id::text
+		`, &lockUntil, now, ids, now).Scan(&claimed).Error; err != nil {
+			return err
+		}
+		if len(claimed) == 0 {
+			jobs = nil
+			return nil
+		}
+		claimedSet := make(map[uuid.UUID]bool, len(claimed))
+		for _, raw := range claimed {
+			parsed, parseErr := uuid.Parse(raw)
+			if parseErr != nil {
+				return parseErr
+			}
+			claimedSet[parsed] = true
+		}
+		kept := jobs[:0]
+		for _, job := range jobs {
+			if claimedSet[job.ID] {
+				job.LockedUntil = &lockUntil
+				kept = append(kept, job)
+			}
+		}
+		jobs = kept
+		return nil
 	})
-	return jobs, err
+	if err != nil {
+		return nil, err
+	}
+	return jobs, nil
 }
 
 func (r *SweepJobRepo) AssignBatch(ctx context.Context, batchID uuid.UUID, batchKey string, policy string, jobIDs []uuid.UUID) error {
@@ -422,7 +495,8 @@ func (r *SweepJobRepo) MarkNeedsOperatorAction(ctx context.Context, id uuid.UUID
 		if loadErr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&job, "id = ?", id).Error; loadErr != nil {
 			return loadErr
 		}
-		if job.Status == models.SweepJobStatusSucceeded {
+		if sweepJobTerminalDecisionKept(job) {
+			// A late/automatic marker must not overwrite a human or terminal decision.
 			return ErrSweepJobStateConflict
 		}
 		if updateErr := tx.Model(&models.SweepJob{}).Where("id = ?", id).Updates(map[string]any{
@@ -553,6 +627,16 @@ func (r *SweepJobRepo) RecordOperatorRecovery(ctx context.Context, id uuid.UUID,
 		eventType := constants.WebhookEventSweepDeadLetteredV1
 		switch action {
 		case models.SweepRecoveryActionRetry:
+			// A10: retry re-queues the job for an automatic send, so it must be
+			// refused once any broadcast evidence exists. Clearing the operator
+			// marker is not a way around the fence.
+			hasEvidence, reason, evErr := sweepJobBroadcastEvidenceWithDB(ctx, tx, job.ID)
+			if evErr != nil {
+				return evErr
+			}
+			if hasEvidence {
+				return fmt.Errorf("%w: %s", ErrSweepBroadcastEvidencePresent, reason)
+			}
 			if retryAt == nil {
 				retry := now
 				retryAt = &retry
@@ -612,6 +696,248 @@ func sweepRecoveryTimesEqual(left, right time.Time) bool {
 	// PostgreSQL timestamps have microsecond precision while callers commonly
 	// retain nanoseconds. Treat the same persisted retry instant as idempotent.
 	return delta < time.Microsecond
+}
+
+// RecordSweepBroadcastObserved records that a sweep was broadcast, without claiming
+// finality (A10/A10-R1). One transaction:
+//   - refuses to overwrite a terminal human/automatic decision (succeeded or a
+//     recorded recovery action): a late hash only persists same-attempt evidence and
+//     hands the case to reconciliation;
+//   - verifies the outbound is the attempt this job actually made (resource
+//     identity, broadcast attempt evidence, never a hash overwrite) and that the
+//     reservation belongs to that outbound/job/chain/wallet and is still reserved or
+//     already consumed with the same hash;
+//   - marks the job dead_letter with the reconcile marker and observed hash;
+//   - marks the outbound broadcasted (never finalized) and consumes the reservation;
+//   - writes the dead-letter lifecycle occurrence and opens the deduplicated scoped
+//     reconciliation with structured evidence, in the same transaction.
+//
+// The ledger hold is untouched. Any failure rolls the whole record back.
+func (r *SweepJobRepo) RecordSweepBroadcastObserved(ctx context.Context, id uuid.UUID, outboundID uuid.UUID, reservationID uuid.UUID, txHash string) error {
+	txHash = strings.TrimSpace(txHash)
+	if id == uuid.Nil || outboundID == uuid.Nil || reservationID == uuid.Nil || txHash == "" {
+		return ErrSweepJobTxHashRequired
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var job models.SweepJob
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&job, "id = ?", id).Error; err != nil {
+			return err
+		}
+		var outbound models.OutboundTransaction
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&outbound, "id = ?", outboundID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("%w: sweep outbound not found", ErrSweepJobStateConflict)
+			}
+			return err
+		}
+		if strings.ToLower(strings.TrimSpace(outbound.ResourceType)) != models.OutboundResourceSweepJob || outbound.ResourceID != job.ID {
+			return fmt.Errorf("%w: outbound does not belong to the sweep job", ErrSweepJobStateConflict)
+		}
+		var reservation models.OutboundChainResourceReservation
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&reservation, "id = ?", reservationID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("%w: sweep reservation not found", ErrSweepJobStateConflict)
+			}
+			return err
+		}
+		if reservation.OutboundTransactionID != outbound.ID ||
+			reservation.OwnerType != models.OutboundResourceSweepJob || reservation.OwnerID != job.ID ||
+			reservation.ChainID != outbound.ChainID || reservation.WalletID != outbound.WalletID {
+			return fmt.Errorf("%w: reservation does not match the sweep attempt", ErrSweepJobStateConflict)
+		}
+		switch reservation.Status {
+		case models.OutboundResourceReservationReserved:
+		case models.OutboundResourceReservationConsumed:
+			if strings.TrimSpace(reservation.TxHash) != txHash || strings.TrimSpace(outbound.TxHash) != txHash {
+				return fmt.Errorf("%w: consumed reservation does not match the observed hash", ErrSweepJobStateConflict)
+			}
+		default:
+			return fmt.Errorf("%w: reservation is not part of an active attempt", ErrSweepJobStateConflict)
+		}
+		if existing := strings.TrimSpace(outbound.TxHash); existing != "" && existing != txHash {
+			return fmt.Errorf("%w: outbound already records a different sweep hash", ErrSweepJobStateConflict)
+		}
+		if outbound.BroadcastAttemptedAt == nil && strings.TrimSpace(outbound.TxHash) == "" {
+			return fmt.Errorf("%w: outbound has no broadcast attempt to record", ErrSweepJobStateConflict)
+		}
+
+		if sweepJobTerminalDecisionKept(job) {
+			if strings.TrimSpace(job.SweepTxHash) == txHash {
+				// The decision already records this exact broadcast: nothing to add.
+				return nil
+			}
+			// A late hash must not rewrite the decision or release anything. This
+			// transaction rolls back, so the caller persists the same-attempt evidence
+			// through RecordSweepBroadcastEvidenceFallback (its own transaction) and the
+			// decision stays untouched.
+			return fmt.Errorf("%w: job=%s hash=%s", ErrSweepTerminalDecisionKept, job.ID, txHash)
+		}
+		if strings.TrimSpace(job.SweepTxHash) == txHash &&
+			strings.TrimSpace(outbound.TxHash) == txHash &&
+			reservation.Status == models.OutboundResourceReservationConsumed {
+			// Idempotent replay: job hash, outbound hash and consumed reservation agree.
+			return nil
+		}
+		if existing := strings.TrimSpace(job.SweepTxHash); existing != "" && existing != txHash {
+			return fmt.Errorf("%w: job already records a different sweep hash", ErrSweepJobStateConflict)
+		}
+
+		now := time.Now()
+		detail := sweepJobErrorText(errors.New("sweep broadcast observed; finality not verified; hold preserved"), "")
+		if err := tx.WithContext(ctx).Model(&models.SweepJob{}).Where("id = ?", id).Updates(map[string]any{
+			"status":           models.SweepJobStatusDeadLetter,
+			"sweep_tx_hash":    txHash,
+			"operator_action":  models.SweepOperatorActionReconcileBroadcast,
+			"failure_category": models.SweepFailureCategoryBroadcastUncertain,
+			"last_error":       detail,
+			"locked_until":     nil,
+			"next_run_at":      nil,
+			"updated_at":       now,
+		}).Error; err != nil {
+			return err
+		}
+		if err := markBroadcastedGuardedWithDB(ctx, tx, outboundID, txHash); err != nil {
+			return err
+		}
+		if err := consumeResourceWithDB(ctx, tx, reservationID, txHash); err != nil {
+			return err
+		}
+		if err := tx.WithContext(ctx).First(&job, "id = ?", id).Error; err != nil {
+			return err
+		}
+		if err := recordSweepLifecycleOccurrenceWithDB(ctx, tx, constants.WebhookEventSweepDeadLetteredV1, job, nil, job.LastError); err != nil {
+			return err
+		}
+		return openSweepBroadcastReconciliationWithDB(ctx, tx, job, outbound, reservation, txHash, sweepBroadcastObservedReason)
+	})
+}
+
+// sweepBroadcastObservedReason is the single scoped reconciliation reason for a
+// broadcast whose finality has not been verified.
+const sweepBroadcastObservedReason = "sweep_broadcast_observed_finality_unverified"
+
+// sweepJobTerminalDecisionKept reports whether a human/terminal decision already
+// settled this job, so a late broadcast hash must only add evidence.
+func sweepJobTerminalDecisionKept(job models.SweepJob) bool {
+	if strings.TrimSpace(job.Status) == models.SweepJobStatusSucceeded {
+		return true
+	}
+	switch strings.TrimSpace(job.RecoveryAction) {
+	case models.SweepRecoveryActionMarkSuccess, models.SweepRecoveryActionPreserveHold, models.SweepRecoveryActionReleaseHold:
+		return job.RecoveredAt != nil
+	}
+	return false
+}
+
+// openSweepBroadcastReconciliationWithDB records the deduplicated scoped
+// reconciliation for an observed-but-unverified sweep broadcast, inside the
+// caller's transaction. Evidence is structured (job/outbound/reservation/hash).
+func openSweepBroadcastReconciliationWithDB(ctx context.Context, tx *gorm.DB, job models.SweepJob, outbound models.OutboundTransaction, reservation models.OutboundChainResourceReservation, txHash string, reason string) error {
+	if tx == nil {
+		return gorm.ErrInvalidDB
+	}
+	merchantID := job.MerchantID
+	evidence := map[string]any{
+		"kind":                    reason,
+		"sweep_job_id":            job.ID.String(),
+		"outbound_transaction_id": outbound.ID.String(),
+		"reservation_id":          reservation.ID.String(),
+		"tx_hash":                 txHash,
+		"finality_verified":       false,
+		"reason":                  "broadcast observed; finality not verified; ledger hold preserved",
+	}
+	_, _, err := NewReconciliationRepo(tx).CreateScopedOpenIfMissing(ctx, ReconciliationScope{
+		ChainID:             job.ChainID,
+		Reason:              reason,
+		MerchantID:          &merchantID,
+		ResourceType:        models.OutboundResourceSweepJob,
+		ResourceID:          job.ID.String(),
+		AffectedResourceIDs: []string{job.ID.String(), outbound.ID.String()},
+		Evidence:            evidence,
+	})
+	return err
+}
+
+// RecordSweepBroadcastEvidenceFallback persists the known broadcast hash and the
+// reconciliation evidence when the full record could not commit. It never releases
+// the hold, never marks a human decision, and reports its own failure to the caller.
+func (r *SweepJobRepo) RecordSweepBroadcastEvidenceFallback(ctx context.Context, id uuid.UUID, outboundID uuid.UUID, reservationID uuid.UUID, txHash string) error {
+	txHash = strings.TrimSpace(txHash)
+	if id == uuid.Nil || txHash == "" {
+		return ErrSweepJobTxHashRequired
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var job models.SweepJob
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&job, "id = ?", id).Error; err != nil {
+			return err
+		}
+		var outbound models.OutboundTransaction
+		_ = tx.WithContext(ctx).First(&outbound, "id = ?", outboundID).Error
+		var reservation models.OutboundChainResourceReservation
+		_ = tx.WithContext(ctx).First(&reservation, "id = ?", reservationID).Error
+		reason := "sweep_broadcast_hash_persist_failed"
+		if sweepJobTerminalDecisionKept(job) {
+			reason = "sweep_broadcast_observed_after_terminal_decision"
+		}
+		if !sweepJobTerminalDecisionKept(job) {
+			now := time.Now()
+			detail := sweepJobErrorText(errors.New("sweep broadcast observed; finality not verified; record failed: "+txHash), "")
+			if err := tx.WithContext(ctx).Model(&models.SweepJob{}).Where("id = ?", id).Updates(map[string]any{
+				"status":           models.SweepJobStatusDeadLetter,
+				"sweep_tx_hash":    txHash,
+				"operator_action":  models.SweepOperatorActionReconcileBroadcast,
+				"failure_category": models.SweepFailureCategoryBroadcastUncertain,
+				"last_error":       detail,
+				"locked_until":     nil,
+				"next_run_at":      nil,
+				"updated_at":       now,
+			}).Error; err != nil {
+				return err
+			}
+			if err := tx.WithContext(ctx).First(&job, "id = ?", id).Error; err != nil {
+				return err
+			}
+		}
+		return openSweepBroadcastReconciliationWithDB(ctx, tx, job, outbound, reservation, txHash, reason)
+	})
+}
+
+// SweepBroadcastEvidence reports whether a sweep job or any of its outbound intents
+// already carries broadcast evidence, so callers can fail closed instead of
+// releasing a hold or re-sending. Database errors are returned to the caller and
+// never folded into "no evidence".
+func (r *SweepJobRepo) SweepBroadcastEvidence(ctx context.Context, id uuid.UUID) (bool, string, error) {
+	if r == nil || r.db == nil {
+		return true, "database unavailable", gorm.ErrInvalidDB
+	}
+	return sweepJobBroadcastEvidenceWithDB(ctx, r.db.WithContext(ctx), id)
+}
+
+func sweepJobBroadcastEvidenceWithDB(ctx context.Context, db *gorm.DB, id uuid.UUID) (bool, string, error) {
+	var job models.SweepJob
+	if err := db.WithContext(ctx).Select("sweep_tx_hash", "operator_action", "failure_category", "status").First(&job, "id = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return true, "sweep_job_missing", nil
+		}
+		return true, "", err
+	}
+	if reason := sweepJobBroadcastBlockReason(job); reason != "" {
+		return true, reason, nil
+	}
+	var evidence int64
+	if err := db.WithContext(ctx).
+		Model(&models.OutboundTransaction{}).
+		Where("resource_type = ? AND resource_id = ?", models.OutboundResourceSweepJob, id).
+		Where(`tx_hash <> '' OR broadcast_attempted_at IS NOT NULL OR broadcasted_at IS NOT NULL OR finalized_at IS NOT NULL
+			OR status IN ('broadcast_attempted', 'broadcasted', 'confirming', 'finalized')
+			OR (status = 'failed' AND lower(btrim(coalesce(error_category, ''))) IN ('terminal_failed', 'broadcast_uncertain', 'replacement_requires_operator'))`).
+		Count(&evidence).Error; err != nil {
+		return true, "", err
+	}
+	if evidence > 0 {
+		return true, "outbound_broadcast_evidence", nil
+	}
+	return false, "", nil
 }
 
 func (r *SweepJobRepo) Find(ctx context.Context, id uuid.UUID) (*models.SweepJob, error) {

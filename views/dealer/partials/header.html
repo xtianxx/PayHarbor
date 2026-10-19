@@ -1,47 +1,51 @@
 {{if .AdminPanel}}
 <header class="admin-titlebar" role="banner">
-  <a class="admin-titlebar-brand" href="{{.AdminOverviewURL}}" aria-label="Gateway Admin">
-    <span class="admin-titlebar-mark">G</span>
-    <span class="admin-titlebar-name">Gateway</span>
+  <a class="admin-titlebar-brand" href="{{.AdminOverviewURL}}" aria-label="{{ t .Locale "PayHarbor Admin" }}">
+    <span class="admin-titlebar-mark">P</span>
+    <span class="admin-titlebar-name">PayHarbor</span>
   </a>
-  <div class="admin-titlebar-command" aria-label="Admin command center">
-    <span class="admin-titlebar-path">admin / {{.AdminPanel}}</span>
+  <div class="admin-titlebar-command" aria-label="{{ t .Locale "Admin command center" }}">
+    <span class="admin-titlebar-path">{{ t .Locale "admin" }} / {{.AdminPanel}}</span>
   </div>
-  <nav class="admin-titlebar-actions" aria-label="Admin actions">
+  <nav class="admin-titlebar-actions" aria-label="{{ t .Locale "Admin actions" }}">
     <span class="admin-titlebar-user">{{.MerchantEmail}}</span>
-    <a class="admin-titlebar-link" href="{{.LogoutURL}}">Çıkış</a>
+    {{if .SwitchURLZH}}<a class="admin-titlebar-link{{if eq .Locale.HTMLTag "zh-CN"}} font-black{{end}}" href="{{.SwitchURLZH}}" lang="zh-CN" hreflang="zh-CN" title="{{ t .Locale "Switch to Simplified Chinese" }}"{{if eq .Locale.HTMLTag "zh-CN"}} aria-current="true"{{end}}>{{ t "zh-CN" "Simplified Chinese" }}</a>{{end}}
+    {{if .SwitchURLEN}}<a class="admin-titlebar-link{{if eq .Locale.HTMLTag "en"}} font-black{{end}}" href="{{.SwitchURLEN}}" lang="en" hreflang="en" title="{{ t .Locale "Switch to English" }}"{{if eq .Locale.HTMLTag "en"}} aria-current="true"{{end}}>{{ t "en" "English" }}</a>{{end}}
+    <a class="admin-titlebar-link" href="{{.LogoutURL}}">{{ t .Locale "Sign out" }}</a>
   </nav>
 </header>
 {{else if and .HasSession (ne .Active "home")}}
 <header class="admin-titlebar merchant-titlebar" role="banner">
-  <a class="admin-titlebar-brand" href="{{.DashboardURL}}" aria-label="Gateway Merchant Console ana sayfası">
-    <span class="admin-titlebar-mark" aria-hidden="true">G</span>
+  <a class="admin-titlebar-brand" href="{{.DashboardURL}}" aria-label="{{ t .Locale "PayHarbor Merchant Console home page" }}">
+    <span class="admin-titlebar-mark" aria-hidden="true">P</span>
     <span class="merchant-brand-copy">
-      <span class="admin-titlebar-name">Gateway</span>
-      <span class="merchant-brand-kicker">Merchant Console</span>
+      <span class="admin-titlebar-name">PayHarbor</span>
+      <span class="merchant-brand-kicker">{{ t .Locale "Merchant Console" }}</span>
     </span>
   </a>
-  <div class="admin-titlebar-command merchant-titlebar-context" aria-label="Aktif merchant çalışma alanı">
-    <span class="merchant-context-label">Çalışma alanı</span>
+  <div class="admin-titlebar-command merchant-titlebar-context" aria-label="{{ t .Locale "Active merchant workspace" }}">
+    <span class="merchant-context-label">{{ t .Locale "Workspace" }}</span>
     <strong class="merchant-context-value">
-      {{if or (eq .ActivePanel "") (eq .ActivePanel "overview")}}Genel Bakış
-      {{else if eq .ActivePanel "treasury"}}Hazine
-      {{else if eq .ActivePanel "activity"}}Aktivite
-      {{else if eq .ActivePanel "transactions"}}İşlemler
-      {{else if eq .ActivePanel "users"}}Kullanıcılar
-      {{else if or (eq .ActivePanel "products") (eq .ActivePanel "domains")}}Entegrasyonlar
-      {{else if eq .ActivePanel "withdrawals"}}Çekimler
-      {{else if eq .ActivePanel "rescan"}}Yeniden İşleme
-      {{else if eq .ActivePanel "settings"}}Ayarlar
+      {{if or (eq .ActivePanel "") (eq .ActivePanel "overview")}}{{ t .Locale "Overview" }}
+      {{else if eq .ActivePanel "treasury"}}{{ t .Locale "Treasury" }}
+      {{else if eq .ActivePanel "activity"}}{{ t .Locale "Activity" }}
+      {{else if eq .ActivePanel "transactions"}}{{ t .Locale "Transactions" }}
+      {{else if eq .ActivePanel "users"}}{{ t .Locale "Users" }}
+      {{else if or (eq .ActivePanel "products") (eq .ActivePanel "domains")}}{{ t .Locale "Integrations" }}
+      {{else if eq .ActivePanel "withdrawals"}}{{ t .Locale "Withdrawals" }}
+      {{else if eq .ActivePanel "rescan"}}{{ t .Locale "Rescan" }}
+      {{else if eq .ActivePanel "settings"}}{{ t .Locale "Settings" }}
       {{else}}{{.ActivePanel}}{{end}}
     </strong>
     <span class="merchant-live-badge">
       <span class="merchant-live-dot" aria-hidden="true"></span>
-      Canlı
+      {{ t .Locale "Live" }}
     </span>
   </div>
-  <nav class="admin-titlebar-actions" aria-label="Merchant hesabı ve yardım bağlantıları">
-    <a class="admin-titlebar-link" href="/swagger/index.html">API Docs</a>
+  <nav class="admin-titlebar-actions" aria-label="{{ t .Locale "Merchant account and help links" }}">
+    <a class="admin-titlebar-link" href="/swagger/index.html">{{ t .Locale "API Docs" }}</a>
+    {{if .SwitchURLZH}}<a class="admin-titlebar-link{{if eq .Locale.HTMLTag "zh-CN"}} font-black{{end}}" href="{{.SwitchURLZH}}" lang="zh-CN" hreflang="zh-CN" title="{{ t .Locale "Switch to Simplified Chinese" }}"{{if eq .Locale.HTMLTag "zh-CN"}} aria-current="true"{{end}}>{{ t "zh-CN" "Simplified Chinese" }}</a>{{end}}
+    {{if .SwitchURLEN}}<a class="admin-titlebar-link{{if eq .Locale.HTMLTag "en"}} font-black{{end}}" href="{{.SwitchURLEN}}" lang="en" hreflang="en" title="{{ t .Locale "Switch to English" }}"{{if eq .Locale.HTMLTag "en"}} aria-current="true"{{end}}>{{ t "en" "English" }}</a>{{end}}
     {{if .MerchantEmail}}
     <span class="merchant-titlebar-account">
       <span class="merchant-user-avatar" aria-hidden="true">M</span>
@@ -49,34 +53,36 @@
         <span class="merchant-account-label">{{.MerchantEmail}}</span>
         <span class="merchant-secure-note">
           <span class="merchant-status-dot" aria-hidden="true"></span>
-          Güvenli oturum
+          {{ t .Locale "Secure session" }}
         </span>
       </span>
     </span>
     {{end}}
-    <a class="admin-titlebar-link" href="{{.LogoutURL}}">Çıkış</a>
+    <a class="admin-titlebar-link" href="{{.LogoutURL}}">{{ t .Locale "Sign out" }}</a>
   </nav>
 </header>
 {{else}}
 <header class="sticky top-0 z-40 border-b border-[rgba(19,19,19,0.07)] bg-white/[0.94] shadow-[0_1px_0_rgba(255,255,255,0.68)_inset] backdrop-blur-xl">
   <div class="mx-auto flex min-h-[64px] w-full max-w-[1180px] flex-col justify-center gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:py-0">
-    <a class="flex min-w-0 max-w-full items-center gap-3 sm:max-w-[52%] lg:max-w-none" href="{{if .HasSession}}{{.DashboardURL}}{{else}}/{{end}}" aria-label="Gateway Üye İşyeri Portalı">
-      <span class="grid h-8 w-8 shrink-0 place-items-center rounded-2xl border bg-white text-[12px] font-black text-accentHover {{if or (eq .Active "admin-login") (eq .Active "admin-2fa-setup") (eq .Active "admin-2fa-verify")}}border-[rgba(239,45,181,0.16)] shadow-[0_8px_18px_rgba(239,45,181,0.11)]{{else}}border-[rgba(0,49,83,0.16)] shadow-[0_8px_18px_rgba(0,49,83,0.11)]{{end}}">G</span>
+    <a class="flex min-w-0 max-w-full items-center gap-3 sm:max-w-[52%] lg:max-w-none" href="{{if .HasSession}}{{.DashboardURL}}{{else}}/{{end}}" aria-label="{{ t .Locale "PayHarbor Merchant Portal" }}">
+      <span class="grid h-8 w-8 shrink-0 place-items-center rounded-2xl border bg-white text-[12px] font-black text-accentHover {{if or (eq .Active "admin-login") (eq .Active "admin-2fa-setup") (eq .Active "admin-2fa-verify")}}border-[rgba(239,45,181,0.16)] shadow-[0_8px_18px_rgba(239,45,181,0.11)]{{else}}border-[rgba(0,49,83,0.16)] shadow-[0_8px_18px_rgba(0,49,83,0.11)]{{end}}">P</span>
       <span class="grid min-w-0 gap-0.5">
-        <span class="truncate text-[14px] font-extrabold leading-tight text-ink">{{if eq .Active "home"}}Gateway{{else}}Gateway Üye İşyeri Portalı{{end}}</span>
-        <span class="hidden truncate text-[11px] font-semibold leading-tight text-muted md:block">Crypto checkout operations</span>
+        <span class="truncate text-[14px] font-extrabold leading-tight text-ink">{{if eq .Active "home"}}PayHarbor{{else}}{{ t .Locale "PayHarbor Merchant Portal" }}{{end}}</span>
+        <span class="hidden truncate text-[11px] font-semibold leading-tight text-muted md:block">{{ t .Locale "Crypto checkout operations" }}</span>
       </span>
     </a>
 
-    <nav class="flex w-full items-center gap-1.5 overflow-x-auto pb-0.5 sm:w-auto sm:justify-end sm:overflow-visible sm:pb-0" aria-label="Üye işyeri menüsü">
+    <nav class="flex w-full items-center gap-1.5 overflow-x-auto pb-0.5 sm:w-auto sm:justify-end sm:overflow-visible sm:pb-0" aria-label="{{ t .Locale "Merchant menu" }}">
       {{if .HasSession}}
-        <a class="inline-flex h-9 shrink-0 items-center rounded-full border border-transparent px-3 text-[13px] font-bold text-muted transition hover:border-line hover:bg-white hover:text-ink {{if eq .Active "dashboard"}}border-line bg-white text-ink shadow-sm{{end}}" href="{{.DashboardURL}}">Panel</a>
-        <a class="inline-flex h-9 shrink-0 items-center rounded-full border border-transparent px-3 text-[13px] font-bold text-muted transition hover:border-line hover:bg-white hover:text-ink" href="{{.LogoutURL}}">Çıkış</a>
+        <a class="inline-flex h-9 shrink-0 items-center rounded-full border border-transparent px-3 text-[13px] font-bold text-muted transition hover:border-line hover:bg-white hover:text-ink {{if eq .Active "dashboard"}}border-line bg-white text-ink shadow-sm{{end}}" href="{{.DashboardURL}}">{{ t .Locale "Dashboard" }}</a>
+        <a class="inline-flex h-9 shrink-0 items-center rounded-full border border-transparent px-3 text-[13px] font-bold text-muted transition hover:border-line hover:bg-white hover:text-ink" href="{{.LogoutURL}}">{{ t .Locale "Sign out" }}</a>
       {{else}}
-        <a class="inline-flex h-9 shrink-0 items-center rounded-full border border-transparent px-3 text-[13px] font-bold text-muted transition hover:border-line hover:bg-white hover:text-ink {{if eq .Active "home"}}border-line bg-white text-ink shadow-sm{{end}}" href="/">Ürün</a>
-        <a class="inline-flex h-9 shrink-0 items-center rounded-full border border-transparent px-3 text-[13px] font-bold text-muted transition hover:border-line hover:bg-white hover:text-ink {{if eq .Active "login"}}border-line bg-white text-ink shadow-sm{{end}}" href="{{.LoginURL}}">Giriş</a>
-        <a class="inline-flex h-9 shrink-0 items-center rounded-full bg-accent px-3.5 text-[13px] font-extrabold text-white shadow-glow transition hover:bg-accentHover" href="{{.RegisterURL}}">{{if eq .Active "home"}}Launch{{else}}Kayıt{{end}}</a>
+        <a class="inline-flex h-9 shrink-0 items-center rounded-full border border-transparent px-3 text-[13px] font-bold text-muted transition hover:border-line hover:bg-white hover:text-ink {{if eq .Active "home"}}border-line bg-white text-ink shadow-sm{{end}}" href="/">{{ t .Locale "Product" }}</a>
+        <a class="inline-flex h-9 shrink-0 items-center rounded-full border border-transparent px-3 text-[13px] font-bold text-muted transition hover:border-line hover:bg-white hover:text-ink {{if eq .Active "login"}}border-line bg-white text-ink shadow-sm{{end}}" href="{{.LoginURL}}">{{ t .Locale "Sign in" }}</a>
+        <a class="inline-flex h-9 shrink-0 items-center rounded-full bg-accent px-3.5 text-[13px] font-extrabold text-white shadow-glow transition hover:bg-accentHover" href="{{.RegisterURL}}">{{if eq .Active "home"}}{{ t .Locale "Launch" }}{{else}}{{ t .Locale "Sign up" }}{{end}}</a>
       {{end}}
+      {{if .SwitchURLZH}}<a class="inline-flex h-9 shrink-0 items-center rounded-full border border-transparent px-3 text-[13px] font-bold text-muted transition hover:border-line hover:bg-white hover:text-ink{{if eq .Locale.HTMLTag "zh-CN"}} border-line bg-white font-black text-ink shadow-sm{{end}}" href="{{.SwitchURLZH}}" lang="zh-CN" hreflang="zh-CN" title="{{ t .Locale "Switch to Simplified Chinese" }}"{{if eq .Locale.HTMLTag "zh-CN"}} aria-current="true"{{end}}>{{ t "zh-CN" "Simplified Chinese" }}</a>{{end}}
+      {{if .SwitchURLEN}}<a class="inline-flex h-9 shrink-0 items-center rounded-full border border-transparent px-3 text-[13px] font-bold text-muted transition hover:border-line hover:bg-white hover:text-ink{{if eq .Locale.HTMLTag "en"}} border-line bg-white font-black text-ink shadow-sm{{end}}" href="{{.SwitchURLEN}}" lang="en" hreflang="en" title="{{ t .Locale "Switch to English" }}"{{if eq .Locale.HTMLTag "en"}} aria-current="true"{{end}}>{{ t "en" "English" }}</a>{{end}}
     </nav>
   </div>
 </header>

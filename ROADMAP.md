@@ -1,4 +1,4 @@
-# Gateway — Implementation Roadmap
+# PayHarbor — Implementation Roadmap
 
 Latest audit date: 2026-06-26
 Latest detailed report: [`docs/payment-gateway-wallet-provider-audit.md`](docs/payment-gateway-wallet-provider-audit.md)
