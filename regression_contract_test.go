@@ -24,11 +24,13 @@ func TestRegressionHarnessDocumentsTrustWalletCoreModes(t *testing.T) {
 	for _, token := range []string{
 		"submodules: recursive",
 		"git submodule update --init --recursive third_party/trustwallet/wallet-core",
-		// Native is exercised through the baseline container path (Dockerfile
-		// gotest stage + deploy/compose/baseline + scripts/baseline runner/gate);
-		// the host-native scripts/regression.sh invocation was retired with that
-		// change and must not come back.
-		"--target gotest",
+		// Native is exercised through the baseline container path (the pinned
+		// Buildx action builds the Dockerfile gotest stage, then
+		// deploy/compose/baseline + scripts/baseline runner/gate); the host-native
+		// scripts/regression.sh invocation was retired with that change and must
+		// not come back.
+		"docker/build-push-action@",
+		"target: gotest",
 		"deploy/compose/baseline/docker-compose.yml",
 		"scripts/baseline/run-tests.sh --evidence /evidence",
 		"scripts/baseline/verify-test-json.py",

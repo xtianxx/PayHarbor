@@ -364,8 +364,18 @@ func TestSweepJobRepoOperatorRecoveryIsAtomicConcurrentAndIdempotent(t *testing.
 
 	_, _, competingJob := seedSweepLifecycleJob(t, db, "operator-recovery-competing")
 	markSweepJobProcessing(t, db, competingJob.ID)
-	if err := repo.MarkNeedsOperatorAction(context.Background(), competingJob.ID, models.SweepOperatorActionReconcileBroadcast, errors.New("manual reconciliation required")); err != nil {
+	// Both race participants must be legitimate recovery actions: a
+	// reconcile-broadcast marker is itself broadcast evidence, so retry would
+	// always be refused by the pre-broadcast fence (covered by
+	// TestSweepJobRepoRetryRefusesBroadcastEvidence) instead of competing for
+	// the status transition.
+	if err := repo.MarkNeedsOperatorAction(context.Background(), competingJob.ID, models.SweepOperatorActionReviewPolicy, errors.New("pre-broadcast policy review")); err != nil {
 		t.Fatal(err)
+	}
+	if hasEvidence, reason, err := sweepJobBroadcastEvidenceWithDB(context.Background(), db, competingJob.ID); err != nil {
+		t.Fatal(err)
+	} else if hasEvidence {
+		t.Fatalf("competing recovery fixture starts with broadcast evidence: %s", reason)
 	}
 	retryAt := time.Now().UTC().Add(time.Minute)
 	start = make(chan struct{})
