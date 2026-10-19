@@ -1,358 +1,364 @@
-# Payment Gateway ve Wallet Provider Uygunluk Raporu
+# Payment Gateway and Wallet Provider Readiness Report
 
-Tarih: 2026-06-26  
-Kapsam: mevcut `gateway` codebase'i; payment gateway, wallet provider, custody, chain indexing, ledger, webhook, payout/refund ve Binance ayarında borsa wallet tracking beklentileri.
+> **Historical assessment (2026-06-26), not current acceptance or security certification.**
+> The findings below record the state of the codebase at that date and are kept for engineering
+> history; they are not a current security audit, an approval to operate, or a statement that the
+> listed gaps are fixed. For the current engineering status and limitations, see the root README.
 
-## Nihai karar
+Date: 2026-06-26
 
-Kısa cevap: Hayır, codebase bugün "kusursuz" payment gateway ve wallet provider ihtiyacını karşılamıyor.
+Scope: the current `gateway` codebase; payment gateway, wallet provider, custody, chain indexing, ledger, webhook, payout/refund and exchange wallet-tracking expectations at Binance scale.
 
-Daha doğru sınıflandırma:
+## Final decision
 
-| Alan | Bugünkü durum | Karar |
+Short answer: no, the codebase does not today satisfy a "flawless" payment gateway and wallet provider requirement.
+
+A more accurate classification:
+
+| Area | Current state | Decision |
 | --- | --- | --- |
-| Merchant/dealer payment gateway MVP | Gerçek ve çalışabilir temel var | Kontrollü beta için uygun olabilir |
-| Production-grade payment gateway | Birçok temel parça var, ama kritik operasyonel açıklar duruyor | Eksik |
-| Wallet provider / custodial wallet ürünü | Deposit wallet ve ledger temeli var, custody güvenliği eksik | Üretime hazır değil |
-| Binance ayarında exchange wallet tracking | Tek prosesli listener ve sınırlı backfill modeli var | Hazır değil |
-| Kurumsal custody | KMS/HSM/MPC signer yok | Hazır değil |
+| Merchant/dealer payment gateway MVP | A real, workable foundation exists | May be suitable for a controlled beta |
+| Production-grade payment gateway | Many core pieces exist, but critical operational gaps remain | Incomplete |
+| Wallet provider / custodial wallet product | Deposit wallet and ledger foundation exist, custody security is missing | Not production-ready |
+| Exchange wallet tracking at Binance scale | Single-process listener and limited backfill model | Not ready |
+| Enterprise custody | No KMS/HSM/MPC signer | Not ready |
 
-Bu repo boş veya sahte bir proje değil. Ödeme oturumu, statik adres, multi-chain HD wallet, ledger, webhook, withdrawal ve refund akışları gerçek kodla kurulmuş. Fakat "kusursuz" veya "borsa seviyesinde" demek için gereken güvenlik, dayanıklılık, reconciliation, reorg muhasebesi, signer mimarisi, durable job sistemi ve operasyonel kontrol katmanları henüz tamam değil.
+This repository is not an empty or fake project. Payment sessions, static addresses, multi-chain HD wallets, ledger, webhook, withdrawal and refund flows are built with real code. But the security, resilience, reconciliation, reorg accounting, signer architecture, durable job system and operational control layers required to call it "flawless" or "exchange-grade" are not complete yet.
 
-## İncelenen ana yüzeyler
+## Main surfaces reviewed
 
-- Payment session ve checkout: `api/handlers/payment.go`, `repositories/payment_repo.go`, `models/payment_session.go`
-- V1 API auth, payout, refund, wallet endpointleri: `api/handlers/v1api.go`
-- Wallet üretimi ve adres sahipliği: `repositories/wallet_repo.go`, `models/wallet.go`
-- Chain signer ve Trust Wallet Core entegrasyonu: `blockchain/basechain.go`, `blockchain/walletcore/*`, `blockchain/chains/*_transfer.go`
-- Deposit listener ve finality: `workers/listeners/*`, `main.go`, `repositories/transaction_repo.go`
+- Payment session and checkout: `api/handlers/payment.go`, `repositories/payment_repo.go`, `models/payment_session.go`
+- V1 API auth, payout, refund, wallet endpoints: `api/handlers/v1api.go`
+- Wallet generation and address ownership: `repositories/wallet_repo.go`, `models/wallet.go`
+- Chain signer and Trust Wallet Core integration: `blockchain/basechain.go`, `blockchain/walletcore/*`, `blockchain/chains/*_transfer.go`
+- Deposit listener and finality: `workers/listeners/*`, `main.go`, `repositories/transaction_repo.go`
 - Ledger: `models/ledger_entry.go`, `repositories/ledger_repo.go`
 - Webhook: `services/webhook/notifier.go`, `repositories/webhook_delivery_repo.go`
 - Withdrawal/refund: `repositories/withdrawal_request_repo.go`, `repositories/refund_repo.go`, `api/handlers/dealer.go`
-- Operasyonel dokümanlar: `docs/product-readiness-audit.md`, `docs/microservices-architecture.md`, `ROADMAP.md`
+- Operational documents: `docs/product-readiness-audit.md`, `docs/microservices-architecture.md`, `ROADMAP.md`
 
-## Güçlü taraflar
+## Strengths
 
-1. Gerçek payment session modeli var.
-   - `models/payment_session.go` ödeme durumlarını, seçilen chain/token bilgisini, beklenen raw tutarı, deposit adresini, tx hash bilgisini, confirmation alanlarını ve webhook attempt alanlarını tutuyor.
-   - `api/handlers/payment.go` payment create, checkout URL, expiry ve idempotency akışını kuruyor.
+1. A real payment session model exists.
+   - `models/payment_session.go` stores payment states, selected chain/token, expected raw amount, deposit address, tx hash, confirmation fields and webhook attempt fields.
+   - `api/handlers/payment.go` implements payment create, checkout URL, expiry and idempotency flows.
 
-2. API auth ve request imzalama temeli var.
-   - `api/handlers/v1api.go` `X-API-Key` veya `Authorization: Bearer` ile domain buluyor.
-   - Mutating endpointlerde `X-API-Secret`, timestamp ve `X-Gateway-Signature` HMAC kontrolü var.
-   - `repositories/idempotency_repo.go` aynı idempotency key farklı payload ile kullanılırsa conflict üretiyor.
+2. API auth and request-signing foundation exists.
+   - `api/handlers/v1api.go` resolves the domain via `X-API-Key` or `Authorization: Bearer`.
+   - Mutating endpoints verify `X-API-Secret`, the timestamp and the `X-Gateway-Signature` HMAC.
+   - `repositories/idempotency_repo.go` returns a conflict when the same idempotency key is reused with a different payload.
 
-3. Multi-chain deterministic wallet üretimi gerçek.
-   - `repositories/wallet_repo.go` merchant/domain/product/user bazında tekil wallet döndürüyor.
-   - HD index için transaction içinde advisory lock kullanılıyor.
-   - Bitcoin, Ethereum, Avalanche, BNB Chain, Base, Arbitrum, Unichain, TRON, Solana, Chiliz adresleri modelde tutuluyor.
+3. Multi-chain deterministic wallet generation is real.
+   - `repositories/wallet_repo.go` returns a unique wallet per merchant/domain/product/user.
+   - HD index allocation uses an advisory lock inside a transaction.
+   - Bitcoin, Ethereum, Avalanche, BNB Chain, Base, Arbitrum, Unichain, TRON, Solana and Chiliz addresses are stored in the model.
 
-4. Trust Wallet Core entegrasyonu mevcut.
-   - `blockchain/walletcore/provider_trustwalletcore.go` `TWHDWallet`, `TWAnyAddress` ve `TWAnySignerSign` kullanıyor.
-   - Fallback provider wallet address üretemiyor ve üretim için uygun değil; bu iyi, çünkü sessizce yanlış adres üretmiyor.
+4. Trust Wallet Core integration exists.
+   - `blockchain/walletcore/provider_trustwalletcore.go` uses `TWHDWallet`, `TWAnyAddress` and `TWAnySignerSign`.
+   - The fallback provider cannot generate wallet addresses and is unsuitable for production; that is good, because it never silently produces a wrong address.
 
-5. Deposit detection ve finality katmanı var.
-   - Chain listenerlar block/slot tarıyor.
-   - `main.go` transaction'ı kaydedip wallet ile eşleştiriyor, finality hesaplıyor, payment eşleşirse ledger ve webhook akışını çalıştırıyor.
-   - `models/transactions.go` confirmation, finalized ve reorg alanlarını içeriyor.
+5. Deposit detection and finality layer exists.
+   - Chain listeners scan blocks/slots.
+   - `main.go` persists the transaction, matches it to a wallet, computes finality and, on a payment match, runs the ledger and webhook flows.
+   - `models/transactions.go` carries confirmation, finalized and reorg fields.
 
-6. Ledger temeli var.
-   - Deposit pending, deposit available, withdrawal hold, withdrawal debit ve refund debit entry tipleri var.
-   - `repositories/ledger_repo.go` birçok hareketi iki satırlı muhasebe yaklaşımıyla yazıyor.
-   - Withdrawal hold sırasında available balance kontrolü yapılıyor.
+6. Ledger foundation exists.
+   - Deposit pending, deposit available, withdrawal hold, withdrawal debit and refund debit entry types exist.
+   - `repositories/ledger_repo.go` writes many movements with a two-row accounting approach.
+   - Available balance is checked while taking a withdrawal hold.
 
-7. Webhook temeli var.
-   - Payload HMAC ile imzalanıyor.
-   - Event id, timestamp ve event type headerları gönderiliyor.
-   - Delivery attempt ve dead-letter benzeri status alanları var.
+7. Webhook foundation exists.
+   - Payloads are HMAC-signed.
+   - Event id, timestamp and event type headers are sent.
+   - Delivery attempt and dead-letter-like status fields exist.
 
-8. Payout/refund workflow var.
-   - Payout request API tarafında oluşturuluyor, ledger hold yazılıyor, admin onayı sonrası transfer ve ledger finalize akışı var.
-   - Refund request paid payment ile sınırlanıyor, refundable tutar kontrol ediliyor.
+8. Payout/refund workflow exists.
+   - Payout requests are created through the API, a ledger hold is written, and transfer plus ledger finalization run after admin approval.
+   - Refund requests are restricted to paid payments and the refundable amount is checked.
 
-## Payment gateway ihtiyaç matrisi
+## Payment gateway needs matrix
 
-| İhtiyaç | Bugünkü durum | Yeterlilik | Eksik |
+| Need | Current state | Adequacy | Missing |
 | --- | --- | --- | --- |
-| Merchant onboarding | Admin/dealer domain, API key, webhook secret var | Orta | Role separation, key rotation policy, audit hardening |
-| API authentication | API key + HMAC imza var | İyi temel | Standart hata kontratı, key scope, replay telemetry, IP allowlist |
-| Payment create | Session, checkout URL, expiry, idempotency var | İyi | Contract testleri ve API versioning güçlenmeli |
-| Hosted checkout | Asset seçimi, QR, websocket status var | Orta-iyi | UX/security audit, tam mobil/regression testleri |
-| Quote ve fiyatlama | Quote snapshot var | Orta | Multi-source oracle, staleness/circuit breaker, extreme volatility policy |
-| Deposit address | Session wallet ve static wallet var | İyi temel | Reuse riskleri için invoice-address policy açık yazılmalı |
-| Payment matching | Chain/symbol/token/amount eşleşiyor, underpay toleransı var | Orta | Underpaid/overpaid/partial-paid lifecycle eksik |
-| Confirmation gate | Transaction finality alanları ve worker var | Orta | Canonical rollback window ve block hash continuity eksik |
-| Ledger posting | Pending/available ve reorg reversal entryleri var | Orta | On-chain reconciliation ve tam rollback workflow eksik |
-| Webhook | HMAC, retry, delivery log var | Orta | Event versioning, exponential backoff, merchant diagnostics, replay idempotency SLA |
-| Refund | Request ve admin onayı var | Orta | Otomatik policy, refund webhook ve chain-finality sonrası net lifecycle güçlenmeli |
-| Payout | Hold + admin approval + transfer var | Orta | Address whitelist, velocity limits, nonce/UTXO reservation, maker-checker policy |
-| Rescan | Transaction replay endpointi var | İyi destek aracı | Full block/range replay ve reconciliation ile bağlanmalı |
-| Observability | Health/readiness ve loglar var | Zayıf-orta | Metrics, tracing, lag, failed job, balance drift alertleri eksik |
+| Merchant onboarding | Admin/dealer domain, API key, webhook secret exist | Medium | Role separation, key rotation policy, audit hardening |
+| API authentication | API key + HMAC signature exist | Good foundation | Standard error contract, key scope, replay telemetry, IP allowlist |
+| Payment create | Session, checkout URL, expiry, idempotency exist | Good | Contract tests and API versioning must be strengthened |
+| Hosted checkout | Asset selection, QR, websocket status exist | Medium-good | UX/security audit, full mobile/regression tests |
+| Quote and pricing | Quote snapshot exists | Medium | Multi-source oracle, staleness/circuit breaker, extreme volatility policy |
+| Deposit address | Session wallet and static wallet exist | Good foundation | Invoice-address policy must explicitly cover reuse risks |
+| Payment matching | Chain/symbol/token/amount matching with underpayment tolerance | Medium | Underpaid/overpaid/partial-paid lifecycle missing |
+| Confirmation gate | Transaction finality fields and worker exist | Medium | Canonical rollback window and block hash continuity missing |
+| Ledger posting | Pending/available and reorg reversal entries exist | Medium | On-chain reconciliation and complete rollback workflow missing |
+| Webhook | HMAC, retry, delivery log exist | Medium | Event versioning, exponential backoff, merchant diagnostics, replay idempotency SLA |
+| Refund | Request and admin approval exist | Medium | Automated policy, refund webhooks and a net lifecycle after chain finality must be strengthened |
+| Payout | Hold + admin approval + transfer exist | Medium | Address whitelist, velocity limits, nonce/UTXO reservation, maker-checker policy |
+| Rescan | Transaction replay endpoint exists | Good support tool | Must be connected to full block/range replay and reconciliation |
+| Observability | Health/readiness and logs exist | Weak-medium | Metrics, tracing, lag, failed job and balance drift alerts missing |
 
-Sonuç: Merchant payment gateway olarak MVP seviyesi güçlü. Üretim seviyesi için en büyük riskler finality/reorg, ledger reconciliation, webhook reliability ve payout güvenliği.
+Conclusion: as a merchant payment gateway the MVP level is strong. The biggest production risks are finality/reorg, ledger reconciliation, webhook reliability and payout security.
 
-## Wallet provider ihtiyaç matrisi
+## Wallet provider needs matrix
 
-| İhtiyaç | Bugünkü durum | Yeterlilik | Eksik |
+| Need | Current state | Adequacy | Missing |
 | --- | --- | --- | --- |
-| Kullanıcı bazlı multi-chain wallet | Merchant/domain/product/user bazında deterministic wallet var | İyi temel | Milyonlarca kullanıcı için partition/index stratejisi eksik |
-| Address ownership | Wallet modelinde unique address alanları var | İyi temel | Address table normalizasyonu ve chain bağımsız lookup ölçeklenmeli |
-| HD derivation | Trust Wallet Core ile yapılıyor | İyi | External signer ile uyumlu key derivation tasarımı eksik |
-| Private key handling | Process içinde mnemonic/private key derivation var | Kritik zayıf | KMS/HSM/MPC yok |
-| Deposit balance | Ledger wallet/domain bazlı bakiye üretiyor | Orta | Liability proof, asset reconciliation, snapshot/close period eksik |
-| Sweep | Durable `sweep_jobs`, retry/dead-letter, tx-hash guard ve reconciliation temeli var | Orta | Multi-replica resource ownership, replacement evidence ve operator recovery UI eksik |
-| Withdrawal | Admin onaylı transfer var | Orta | Nonce/UTXO lock, address whitelist, risk engine, approval matrix eksik |
-| Token desteği | ERC-20, TRC-20, SPL gibi transfer pathleri var | Orta | Token registry ve chain-specific edge case testleri genişlemeli |
-| Custody policy | Reserve wallet kavramı var | Zayıf | Hot/warm/cold tier, daily limit, freeze, signer audit, segregation eksik |
-| Exchange user wallet | Statik deposit wallet endpointi var | Orta | Borsa ölçeğinde address lifecycle ve full audit trail eksik |
-| Compliance | Temel ürün akışında görünmüyor | Zayıf | AML, sanctions, KYT, travel rule, case management yok |
-| DR/backup | Kodda belirgin değil | Zayıf | Seed/key backup, restore drill, signer quorum, runbook yok |
+| Per-user multi-chain wallet | Deterministic wallet per merchant/domain/product/user exists | Good foundation | Partition/index strategy for millions of users missing |
+| Address ownership | Unique address fields exist in the wallet model | Good foundation | Address table normalization and chain-independent lookup must scale |
+| HD derivation | Performed with Trust Wallet Core | Good | Key derivation design compatible with an external signer missing |
+| Private key handling | Mnemonic/private key derivation inside the process | Critically weak | No KMS/HSM/MPC |
+| Deposit balance | Ledger produces balances per wallet/domain | Medium | Liability proof, asset reconciliation, snapshot/close period missing |
+| Sweep | Durable `sweep_jobs`, retry/dead-letter, tx-hash guard and reconciliation foundation exist | Medium | Multi-replica resource ownership, replacement evidence and operator recovery UI missing |
+| Withdrawal | Admin-approved transfer exists | Medium | Nonce/UTXO lock, address whitelist, risk engine, approval matrix missing |
+| Token support | ERC-20, TRC-20, SPL transfer paths exist | Medium | Token registry and chain-specific edge-case tests must expand |
+| Custody policy | A reserve-wallet concept exists | Weak | Hot/warm/cold tier, daily limit, freeze, signer audit, segregation missing |
+| Exchange user wallet | Static deposit wallet endpoint exists | Medium | Address lifecycle and full audit trail at exchange scale missing |
+| Compliance | Not visible in the core product flow | Weak | No AML, sanctions, KYT, travel rule or case management |
+| DR/backup | Not explicit in the code | Weak | No seed/key backup, restore drill, signer quorum or runbook |
 
-Sonuç: Codebase "custodial wallet provider" için temel atmış, ama müşteri fonlarını ciddi hacimde tutacak bir wallet provider olmak için kritik güvenlik ve operasyon parçaları eksik.
+Conclusion: the codebase has laid a foundation for a "custodial wallet provider", but critical security and operational pieces are missing to be a wallet provider holding customer funds at serious volume.
 
-## Trust Wallet Core ve transfer doğrulaması
+## Trust Wallet Core and transfer verification
 
-"Bütün blockchainlerde wallet ve transfer Trust Wallet üzerinden mi?" sorusunun cevabı: Wallet üretimi büyük ölçüde Trust Wallet Core üzerinden; transfer imzalama ise her chain için Trust Wallet Core üzerinden değil.
+The answer to "are wallets and transfers on all blockchains done through Trust Wallet?" is: wallet generation largely through Trust Wallet Core; transfer signing not through Trust Wallet Core for every chain.
 
-| Chain grubu | Wallet derivation | Transfer signing | Karar |
+| Chain group | Wallet derivation | Transfer signing | Decision |
 | --- | --- | --- | --- |
-| Bitcoin | Trust Wallet Core | P2WPKH Trust Wallet Core, mevcut Taproot sweep için manual fallback | Karışık |
-| Ethereum | Trust Wallet Core | Trust Wallet Core native/ERC-20 signing | Evet |
-| Avalanche | Trust Wallet Core | EVM Trust Wallet Core path | Evet |
-| BNB Chain | Trust Wallet Core | EVM Trust Wallet Core path | Evet |
-| Base | Trust Wallet Core | EVM Trust Wallet Core path | Evet |
-| Arbitrum | Trust Wallet Core | EVM Trust Wallet Core path | Evet |
-| Unichain | Trust Wallet Core | EVM Trust Wallet Core path | Evet |
-| Chiliz | Trust Wallet Core | EVM Trust Wallet Core path | Evet |
-| TRON | Trust Wallet Core | TRON SDK path | Hayır, sadece derivation Trust Wallet Core |
-| Solana | Trust Wallet Core | Solana SDK path | Hayır, sadece derivation Trust Wallet Core |
+| Bitcoin | Trust Wallet Core | P2WPKH Trust Wallet Core, manual fallback for the current Taproot sweep | Mixed |
+| Ethereum | Trust Wallet Core | Trust Wallet Core native/ERC-20 signing | Yes |
+| Avalanche | Trust Wallet Core | EVM Trust Wallet Core path | Yes |
+| BNB Chain | Trust Wallet Core | EVM Trust Wallet Core path | Yes |
+| Base | Trust Wallet Core | EVM Trust Wallet Core path | Yes |
+| Arbitrum | Trust Wallet Core | EVM Trust Wallet Core path | Yes |
+| Unichain | Trust Wallet Core | EVM Trust Wallet Core path | Yes |
+| Chiliz | Trust Wallet Core | EVM Trust Wallet Core path | Yes |
+| TRON | Trust Wallet Core | TRON SDK path | No, derivation only via Trust Wallet Core |
+| Solana | Trust Wallet Core | Solana SDK path | No, derivation only via Trust Wallet Core |
 
-Bu tek başına fatal bir bug değildir. Chain SDK ile imzalama yapılabilir. Fatal olan nokta, üretim custody için imzalamanın process içindeki mnemonic/private key ile yapılmasıdır. `SIGNER_MODE=kms/hsm/mpc` seçenekleri bugün gerçek external signer entegrasyonu değil, "integration required" hatası döndüren placeholder durumundadır.
+This alone is not a fatal bug. Signing through a chain SDK is acceptable. What is fatal for production custody is signing with a mnemonic/private key inside the process. The `SIGNER_MODE=kms/hsm/mpc` options are not a real external signer integration today; they are placeholders that return an "integration required" error.
 
-## Binance ayarında wallet tracking değerlendirmesi
+## Wallet tracking assessment at Binance scale
 
-Binance ayarında bir borsa wallet tracking sistemi için beklenen minimumlar:
+Minimum expectations for exchange wallet tracking at Binance scale:
 
-- Her chain için durable, shard edilebilir, yatay ölçeklenebilir indexer.
-- İlk kurulumda genesis/configured start block'tan deterministik backfill.
-- Her block için block hash parent hash takibi.
-- Reorg tespiti, transaction reversal ve ledger reversal.
-- RPC node quorum veya provider failover kalitesi.
-- Çok büyük address setleri için partitioned lookup.
-- At-least-once event delivery ve idempotent consumer modeli.
-- Block lag, queue lag, failed tx, stale node, missed block alertleri.
-- UTXO chainlerde UTXO reservation ve coin selection.
-- EVM chainlerde nonce manager, replacement transaction, stuck tx recovery.
-- Token metadata ve contract event decoding için registry ve migration policy.
-- Gün sonu on-chain balance ile internal ledger reconciliation.
+- A durable, shardable, horizontally scalable indexer for every chain.
+- Deterministic backfill from genesis/configured start block on first setup.
+- Block hash parent hash tracking for every block.
+- Reorg detection, transaction reversal and ledger reversal.
+- RPC node quorum or provider failover quality.
+- Partitioned lookup for very large address sets.
+- At-least-once event delivery and an idempotent consumer model.
+- Alerts for block lag, queue lag, failed tx, stale node and missed blocks.
+- UTXO reservation and coin selection on UTXO chains.
+- Nonce manager, replacement transaction and stuck-tx recovery on EVM chains.
+- A registry and migration policy for token metadata and contract event decoding.
+- End-of-day reconciliation between on-chain balance and internal ledger.
 
-Mevcut kodda bunların yalnızca bir kısmı var:
+Only some of these exist in the current code:
 
-- Listener var ve artık explicit start block/slot env ayarıyla geçmişten başlatılabiliyor. Env ayarı verilmezse ilk start davranışı hâlâ safe/latest'e yakınsar; bu nedenle otomatik full-history backfill sayılmaz.
-- Poll başına limitler düşük: EVM 5 block, Bitcoin 2 block, Solana 8 slot, TRON 10 block. Uzun downtime sonrası yetişme süresi zayıf.
-- Reorg correction için same-height block hash conflict tespiti, transaction `reorged` status, ledger reversal ve correction webhook temeli var.
-- `chain_state` last processed/confirmed block tutuyor, fakat block hash continuity ve rollback muhasebesi üretim seviyesinde değil.
-- Auto-sweep artık durable job tablosuna taşındı ve webhook retry backoff güçlendi. Kalan açık chain event bus, range replay ve bazı worker akışlarının hâlâ monolith/process içi olmasıdır.
-- Address matching pratikte çalışabilir, ama milyonlarca adres için normalleşmiş address index/partition stratejisi şart.
+- Listeners exist and can now start from the past with explicit start block/slot env settings. Without that setting the first-start behavior still converges to safe/latest; therefore it does not count as an automatic full-history backfill.
+- Per-poll limits are low: EVM 5 blocks, Bitcoin 2 blocks, Solana 8 slots, TRON 10 blocks. Catching up after a long downtime is weak.
+- For reorg correction there is same-height block hash conflict detection, a transaction `reorged` status, ledger reversal and a correction webhook foundation.
+- `chain_state` keeps the last processed/confirmed block, but block hash continuity and rollback accounting are not production-grade.
+- Auto-sweep has been moved to a durable job table and webhook retry backoff has been strengthened. The remaining gaps are the chain event bus, range replay and the fact that some worker flows still run inside the monolith/process.
+- Address matching works in practice, but a normalized address index/partition strategy is mandatory for millions of addresses.
 
-Sonuç: Bu haliyle Binance ölçeğinde exchange wallet tracking yapamaz. Küçük/orta hacimli merchant gateway veya kontrollü wallet-provider pilotu için geliştirilebilir bir taban var.
+Conclusion: in this state it cannot perform exchange wallet tracking at Binance scale. It has a foundation that can be developed into a small/medium-volume merchant gateway or a controlled wallet-provider pilot.
 
-## Kritik açıklar
+## Critical gaps
 
-### 2026-06-26 Kod Düzeltme Güncellemesi
+### 2026-06-26 Code Fix Update
 
-Bu rapordan sonra codebase'e şu düzeltmeler işlendi:
+After this report, the following fixes were applied to the codebase:
 
-- Auto-sweep artık doğrudan goroutine ile kaybolan bir iş değil. Finalized deposit sonrası `sweep_jobs` tablosuna idempotent job yazılıyor; worker `FOR UPDATE SKIP LOCKED` ile claim ediyor, başarısızlıkta exponential backoff uyguluyor, maksimum deneme sonrası `dead_letter` durumuna alıyor ve başarılı sweep tx hash'ini saklıyor.
-- Listener ilk başlangıç davranışı kısmen düzeltildi. `CHAIN_<id>_START_BLOCK`, `<CHAIN_NAME>_START_BLOCK`, `START_BLOCK_<CHAIN_NAME>` veya `CHAIN_START_BLOCK_DEFAULT` verilirse listener geçmiş taramaya o blok/slot değerinden başlayabiliyor.
-- Webhook payload'ları ve header'ları event version bilgisi taşıyor: `event_version: "v1"` ve `X-Gateway-Event-Version: v1`.
-- Transaction/payment webhook retry akışı artık başarısız denemede hemen tekrar dönmüyor; exponential backoff ve `WEBHOOK_MAX_ATTEMPTS` gating kullanıyor.
-- Ledger invariant taraması eklendi. Aynı idempotency key altındaki debit/credit toplamı sıfır değilse reconciliation job açılıyor.
-- Reorg için ilk koruma eklendi. Aynı chain ve aynı block height üzerinde farklı block hash görülürse eski transactionlar `reorged` olur, `transaction_reorged` webhook'una hazırlanır, bağlı ledger entryleri idempotent `reorg_reversal` entryleriyle terslenir, bağlı paid payment `payment_failed` correction webhook'una çekilir, bekleyen sweep job dead-letter yapılır ve reconciliation job açılır.
+- Auto-sweep is no longer a goroutine that disappears. After a finalized deposit, an idempotent job is written to the `sweep_jobs` table; the worker claims it with `FOR UPDATE SKIP LOCKED`, applies exponential backoff on failure, moves it to `dead_letter` after the maximum attempts and stores the successful sweep tx hash.
+- Listener first-start behavior was partially fixed. If `CHAIN_<id>_START_BLOCK`, `<CHAIN_NAME>_START_BLOCK`, `START_BLOCK_<CHAIN_NAME>` or `CHAIN_START_BLOCK_DEFAULT` is provided, the listener can start historical scanning from that block/slot.
+- Webhook payloads and headers carry event version information: `event_version: "v1"` and `X-Gateway-Event-Version: v1`.
+- The transaction/payment webhook retry flow no longer retries immediately on a failed attempt; it uses exponential backoff and `WEBHOOK_MAX_ATTEMPTS` gating.
+- A ledger invariant scan was added. If the debit/credit total under the same idempotency key is not zero, a reconciliation job is opened.
+- A first protection for reorgs was added. If a different block hash is seen on the same chain and block height, old transactions become `reorged`, are prepared for the `transaction_reorged` webhook, linked ledger entries are reversed with idempotent `reorg_reversal` entries, the linked paid payment is pulled into the `payment_failed` correction webhook, pending sweep jobs are dead-lettered and a reconciliation job is opened.
 
-Bu düzeltmeler durable sweep, webhook hardening, configurable backfill, reorg correction ve reconciliation temelini iyileştirdi. Aşağıdaki P0 maddelerden bazıları artık "tamamen yok" değil, "kısmi tamamlandı" durumundadır. Ancak gerçek production signer, canonical parent/child block tracking, horizontal durable event bus ve custody policy hâlâ açık kalır.
+These fixes improved the durable sweep, webhook hardening, configurable backfill, reorg correction and reconciliation foundation. Some of the P0 items below are no longer "completely missing" but "partially completed". However, a real production signer, canonical parent/child block tracking, a horizontally durable event bus and custody policy still remain open.
 
-### P0 - Canlı müşteri fonu almadan önce çözülmeli
+### P0 - Must be resolved before holding live customer funds
 
-1. Gerçek production signer yok.
-   - Kanıt: `services/signer` external custody adapter kontratını ve production watch-only boundary'yi tanımlar; fakat `SIGNER_MODE=kms/hsm/mpc` için gerçek provider implementation ve chain-specific external signing yoktur.
-   - Risk: Mnemonic/process memory ile custody fonu tutmak kabul edilemez.
-   - Kabul kriteri: KMS/HSM/MPC signer interface, chain başına signing adapter, audit log, key export olmadan imza, testnet/mainnet shadow test.
+1. No real production signer.
+   - Evidence: `services/signer` defines the external custody adapter contract and the production watch-only boundary, but there is no real provider implementation or chain-specific external signing for `SIGNER_MODE=kms/hsm/mpc`.
+   - Risk: Holding custody funds with a mnemonic/process memory is unacceptable.
+   - Acceptance criteria: KMS/HSM/MPC signer interface, per-chain signing adapter, audit log, signing without key export, testnet/mainnet shadow test.
 
-2. Reorg-safe indexer kısmen tamamlandı.
-   - Güncel durum: Aynı chain/block height üzerinde yeni bir block hash görülürse eski transactionlar `reorged` olur, linked ledger entryleri terslenir, linked paid payment `failed` correction webhook'una hazırlanır ve reconciliation job açılır.
-   - Kalan risk: Canonical parent/child block hash zinciri, proactive rollback-window scan ve fork simulation testleri henüz yok.
-   - Kalan kabul kriteri: Block parent tracking, rollback window processor, deterministic fork simulation, operator reconciliation workflow.
+2. Reorg-safe indexer partially completed.
+   - Current state: If a new block hash is seen on the same chain/block height, old transactions become `reorged`, linked ledger entries are reversed, the linked paid payment is prepared for the `failed` correction webhook and a reconciliation job is opened.
+   - Remaining risk: A canonical parent/child block hash chain, a proactive rollback-window scan and fork simulation tests are still missing.
+   - Remaining acceptance criteria: Block parent tracking, rollback window processor, deterministic fork simulation, operator reconciliation workflow.
 
-3. Durable backfill ve job queue kısmen tamamlandı.
-   - Güncel durum: Listenerlar artık explicit start block/slot env ayarı alabiliyor. Sweep işleri `sweep_jobs` tablosunda persistent job olarak tutuluyor. Webhook retry backoff güçlendi.
-   - Kalan risk: Chain event bus hâlâ monolith/process içi; full historical range replay, poison queue ve operator replay UI tam ürünleşmedi.
-   - Kalan kabul kriteri: Durable chain event queue, range replay worker, poison queue, operator replay UI.
+3. Durable backfill and job queue partially completed.
+   - Current state: Listeners can now take an explicit start block/slot env setting. Sweep jobs are kept as persistent jobs in the `sweep_jobs` table. Webhook retry backoff was strengthened.
+   - Remaining risk: The chain event bus is still inside the monolith/process; full historical range replay, poison queue and an operator replay UI are not fully productized.
+   - Remaining acceptance criteria: Durable chain event queue, range replay worker, poison queue, operator replay UI.
 
-4. Ledger reconciliation kısmen tamamlandı.
-   - Güncel durum: Ledger invariant checker eklendi; debit/credit toplamı bozuk idempotency key için reconciliation job açılıyor.
-   - Kalan kanıt: On-chain balance karşılaştırması, reserve proof ve drift alertleri henüz yok.
-   - Risk: Bakiye doğru görünürken on-chain fon farklı olabilir.
-   - Kalan kabul kriteri: Daily on-chain reconciliation job, per asset liability report, on-chain reserve proof, negative balance guard, dashboard/alert.
+4. Ledger reconciliation partially completed.
+   - Current state: A ledger invariant checker was added; a reconciliation job is opened for idempotency keys with a broken debit/credit total.
+   - Remaining evidence: On-chain balance comparison, reserve proof and drift alerts are still missing.
+   - Risk: The balance may look correct while the on-chain funds differ.
+   - Remaining acceptance criteria: Daily on-chain reconciliation job, per-asset liability report, on-chain reserve proof, negative balance guard, dashboard/alert.
 
-5. Withdrawal güvenliği güçlendi, ancak borsa seviyesinde tamam değil.
-   - Güncel durum: Hold ve admin approval yanında outbound policy setting/whitelist tabloları, emergency freeze, raw amount limit, rolling velocity limit, high-risk admin role guard ve append-only activity log eklendi.
-   - Kalan eksik: Risk score, nonce/UTXO reservation ve gelişmiş approval matrix hâlâ yok.
-   - Risk: Yanlış/adversarial payout, double spend benzeri concurrency, stuck transaction.
-   - Kalan kabul kriteri: Risk scoring, nonce/UTXO lock, stuck tx replacement.
+5. Withdrawal security was strengthened, but is not complete at exchange level.
+   - Current state: In addition to hold and admin approval, outbound policy setting/whitelist tables, emergency freeze, raw amount limit, rolling velocity limit, high-risk admin role guard and an append-only activity log were added.
+   - Remaining gaps: Risk score, nonce/UTXO reservation and an advanced approval matrix are still missing.
+   - Risk: Wrong/adversarial payouts, double-spend-like concurrency, stuck transactions.
+   - Remaining acceptance criteria: Risk scoring, nonce/UTXO lock, stuck tx replacement.
 
-6. Auto-sweep durable job'a taşındı.
-   - Güncel durum: `sweep_jobs` status machine, retry, lock, idempotency, dead-letter, bounded failure category, sweep tx hash kaydı ve parent-job prefund attempt/error/category state eklendi.
-   - Kalan risk: Gas prefund ayrı idempotent alt-job değil; admin recovery ekranı ve multi-replica durable resource ownership hâlâ güçlendirilmeli.
-   - Kalan kabul kriteri: Admin recovery ekranı, durable multi-replica nonce/UTXO/resource locking, operator replay/reconcile workflow.
+6. Auto-sweep was moved to a durable job.
+   - Current state: `sweep_jobs` status machine, retry, lock, idempotency, dead-letter, bounded failure category, sweep tx hash record and parent-job prefund attempt/error/category state were added.
+   - Remaining risk: Gas prefund is not a separate idempotent child job; the admin recovery screen and multi-replica durable resource ownership still need strengthening.
+   - Remaining acceptance criteria: Admin recovery screen, durable multi-replica nonce/UTXO/resource locking, operator replay/reconcile workflow.
 
-### P1 - Production readiness için gerekli
+### P1 - Required for production readiness
 
 1. Webhook event contract versioning.
-   - Güncel durum: Payload ve header seviyesinde `v1` event version eklendi.
-   - Kalan: Versiyon katalog dokümanı, backwards compatibility policy ve consumer contract testleri.
+   - Current state: A `v1` event version was added at payload and header level.
+   - Remaining: Version catalog documentation, backwards-compatibility policy and consumer contract tests.
 
-2. Webhook retry kalitesi.
-   - Güncel durum: Exponential backoff ve max-attempt gating eklendi.
-   - Kalan: Per-merchant rate limit, replay audit ve merchant diagnostics.
+2. Webhook retry quality.
+   - Current state: Exponential backoff and max-attempt gating were added.
+   - Remaining: Per-merchant rate limit, replay audit and merchant diagnostics.
 
 3. Underpaid/overpaid/partial-paid lifecycle.
-   - Bugün amount matching toleranslı ama underpayment ayrı event/status olarak güçlü modellenmiyor.
+   - Amount matching is tolerant today, but underpayment is not strongly modeled as a separate event/status.
 
 4. Price oracle hardening.
-   - Quote snapshot var, fakat multi-source pricing, staleness guard, volatility freeze ve oracle outage policy üretim seviyesine çıkmalı.
+   - A quote snapshot exists, but multi-source pricing, staleness guard, volatility freeze and oracle outage policy must reach production level.
 
 5. API contract stability.
-   - V1 endpointler var, ama OpenAPI contract tests, backwards-compatible error envelope ve deprecation policy şart.
+   - V1 endpoints exist, but OpenAPI contract tests, a backwards-compatible error envelope and a deprecation policy are mandatory.
 
 6. Observability.
-   - Chain lag, listener health, block processing latency, webhook failure rate, sweep backlog, ledger drift, signer latency metrikleri eksik.
+   - Metrics for chain lag, listener health, block processing latency, webhook failure rate, sweep backlog, ledger drift and signer latency are missing.
 
-7. Database migration ve constraints.
-   - GORM model indexleri var, ama production migration dosyaları, check constraints, partial indexes ve online migration stratejisi güçlenmeli.
+7. Database migration and constraints.
+   - GORM model indexes exist, but production migration files, check constraints, partial indexes and an online migration strategy must be strengthened.
 
-8. Test kapsamı.
-   - Unit testler mevcut, ancak chain integration, fork/reorg simulation, webhook retry, withdrawal concurrency, ledger invariant ve crash recovery testleri artırılmalı.
+8. Test coverage.
+   - Unit tests exist, but chain integration, fork/reorg simulation, webhook retry, withdrawal concurrency, ledger invariant and crash recovery tests must be increased.
 
-### P2 - Ölçek ve kurumsal ürünleşme
+### P2 - Scale and enterprise productization
 
-1. Chain indexer mikroservis ayrımı.
-   - `docs/microservices-architecture.md` doğru hedefi tarif ediyor. Uygulamada chain indexer, wallet, ledger, webhook ve payment session servisleri kademeli ayrılmalı.
+1. Chain indexer microservice separation.
+   - `docs/microservices-architecture.md` describes the right target. In practice the chain indexer, wallet, ledger, webhook and payment session services should be separated gradually.
 
-2. Address index normalizasyonu.
-   - Wallet modelindeki chain-specific kolonlar MVP için hızlı, ama çok chain/çok token/çok adres ölçeğinde `wallet_addresses` benzeri normalize tablo daha doğru.
+2. Address index normalization.
+   - The chain-specific columns in the wallet model are fast for an MVP, but at multi-chain/multi-token/multi-address scale a normalized table such as `wallet_addresses` is more correct.
 
-3. Compliance ve risk entegrasyonları.
+3. Compliance and risk integrations.
    - AML/KYT provider, sanctions screening, travel rule, suspicious activity workflow, case management.
 
 4. Tenant isolation.
-   - Domain/merchant scope var, ama kurumsal kullanım için per-tenant rate limit, quotas, data export, audit isolation, encryption policy gerekir.
+   - Domain/merchant scope exists, but enterprise use needs per-tenant rate limits, quotas, data export, audit isolation and an encryption policy.
 
 5. Reporting.
    - Merchant settlement report, tax/accounting export, liability/reserve report, failed payment/refund/payout report.
 
-## Ürünün bugünkü gerçek konumu
+## Where the product really stands today
 
-### Payment gateway olarak
+### As a payment gateway
 
-Gerçekçi konum: Controlled beta / limited production candidate.
+Realistic position: controlled beta / limited production candidate.
 
-Kullanım şartları:
+Conditions of use:
 
-- Küçük hacim.
-- Sınırlı merchant.
-- Limitli chain/token seti.
-- Operatör gözetimi.
-- Manuel reconciliation.
-- Düşük custody bakiyesi.
-- Testnet ve düşük tutarlı mainnet pilotu.
+- Small volume.
+- Limited merchants.
+- Limited chain/token set.
+- Operator supervision.
+- Manual reconciliation.
+- Low custody balance.
+- Testnet and low-amount mainnet pilot.
 
-Canlı büyük hacimli ödeme almak için P0 maddeleri tamamlanmalı.
+P0 items must be completed before accepting live high-volume payments.
 
-### Wallet provider olarak
+### As a wallet provider
 
-Gerçekçi konum: Developer preview / internal pilot.
+Realistic position: developer preview / internal pilot.
 
-Wallet provider olarak en kritik eksik custody güvenliği. Wallet üretimi ve deposit detection tek başına wallet provider olmak için yetmez. Wallet provider fon tutar, transfer imzalar, charge/dispute/refund/payout yönetir, ledger ile on-chain rezervi günlük doğrular, anahtarları operatörün process memory'sine çıkarmadan imzalar.
+The most critical gap for a wallet provider is custody security. Wallet generation and deposit detection alone are not enough to be a wallet provider. A wallet provider holds funds, signs transfers, manages charge/dispute/refund/payout, verifies on-chain reserves against the ledger daily and signs without exposing keys to the operator's process memory.
 
-Bu codebase o hedefe doğru ilerliyor, ama bugün production custody ürünü değildir.
+This codebase is moving toward that target, but it is not a production custody product today.
 
-### Binance ayarında borsa wallet tracking olarak
+### As exchange wallet tracking at Binance scale
 
-Gerçekçi konum: Hazır değil.
+Realistic position: not ready.
 
-Bir borsa, milyonlarca adres ve yüksek hacimli deposit/withdrawal akışında "kaçırmama" garantisi ister. Mevcut listener mimarisi tek prosesli, düşük batch limitli ve geçmiş tarama/reorg bakımından yetersiz. Borsa ölçeği için ayrı indexer servisi, durable queue, block hash ledger, reorg rollback ve partitioned address matching şart.
+An exchange expects a "no missed events" guarantee across millions of addresses and high-volume deposit/withdrawal flows. The current listener architecture is single-process, with low batch limits and insufficient historical scanning/reorg handling. Exchange scale requires a separate indexer service, a durable queue, a block hash ledger, reorg rollback and partitioned address matching.
 
-## Kabul kriterleri
+## Acceptance criteria
 
-Payment gateway production-ready diyebilmek için:
+To call the payment gateway production-ready:
 
-- P0 signer, reorg, durable queue, ledger reconciliation, withdrawal policy maddeleri tamam.
-- Tüm supported chainlerde testnet E2E: payment create -> deposit -> finality -> ledger -> webhook.
-- Mainnet canary: küçük limitli, otomatik alertli, rollback runbooklu.
-- Webhook replay ve dead-letter operator ekranı.
-- Price oracle staleness ve fallback policy.
-- API contract tests CI'da zorunlu.
-- `go test ./...`, `go vet ./...`, race/concurrency kritik testleri CI'da zorunlu.
+- P0 signer, reorg, durable queue, ledger reconciliation and withdrawal policy items are complete.
+- Testnet E2E on all supported chains: payment create -> deposit -> finality -> ledger -> webhook.
+- Mainnet canary: small limits, automatic alerts, rollback runbook.
+- Webhook replay and dead-letter operator screen.
+- Price oracle staleness and fallback policy.
+- API contract tests mandatory in CI.
+- `go test ./...`, `go vet ./...`, race/concurrency critical tests mandatory in CI.
 
-Wallet provider production-ready diyebilmek için:
+To call the wallet provider production-ready:
 
-- KMS/HSM/MPC signer aktif.
-- Private key/mnemonic application process içinde tutulmuyor.
-- Deposit, sweep, withdrawal durable job state machine ile çalışıyor.
-- Per-wallet/per-chain nonce ve UTXO reservation var.
-- Hot/warm/cold wallet policy ve emergency freeze var.
-- Daily asset liability/reconciliation raporu var.
-- Admin actions immutable audit log ile izleniyor.
-- KYT/AML/sanctions entegrasyonu veya ürün kapsamı dışında olduğuna dair yazılı policy var.
+- KMS/HSM/MPC signer active.
+- Private key/mnemonic is not kept inside the application process.
+- Deposit, sweep and withdrawal run through durable job state machines.
+- Per-wallet/per-chain nonce and UTXO reservation exist.
+- Hot/warm/cold wallet policy and emergency freeze exist.
+- Daily asset liability/reconciliation report exists.
+- Admin actions are tracked with an immutable audit log.
+- KYT/AML/sanctions integration exists, or there is a written policy that it is out of product scope.
 
-Binance ayarında tracking diyebilmek için:
+To be able to call it tracking at Binance scale:
 
-- Chain indexer yatay ölçekleniyor.
-- Configured historical start block'tan deterministic backfill yapıyor.
-- Reorg simulation testleri geçiyor.
-- Address lookup partitioned ve milyonlarca adresle benchmark edilmiş.
-- Node failover/quorum var.
-- Event bus durable.
-- Block lag ve missed block alertleri var.
-- Ledger drift zero-tolerance alertleri var.
+- The chain indexer scales horizontally.
+- It performs deterministic backfill from a configured historical start block.
+- Reorg simulation tests pass.
+- Address lookup is partitioned and benchmarked with millions of addresses.
+- Node failover/quorum exists.
+- The event bus is durable.
+- Block lag and missed block alerts exist.
+- Ledger drift zero-tolerance alerts exist.
 
-## Önerilen roadmap
+## Recommended roadmap
 
-### İlk 2 hafta
+### First 2 weeks
 
-1. External signer interface tasarla: `SignEVM`, `SignBitcoin`, `SignTRON`, `SignSolana` gibi chain-specific request/response modelleri.
-2. Auto-sweep'i durable job table'a taşı. Durum: tamamlandı.
-3. Listenerlara configurable start block ekle. Durum: tamamlandı; range replay worker hâlâ açık.
-4. Ledger invariant checker ekle. Durum: temel checker tamamlandı; kapsamlı invariant testleri hâlâ açık.
-5. Webhook event schema `v1` olarak dondur. Durum: payload/header tamamlandı; contract test ve katalog hâlâ açık.
+1. Design the external signer interface: chain-specific request/response models such as `SignEVM`, `SignBitcoin`, `SignTRON`, `SignSolana`.
+2. Move auto-sweep to a durable job table. Status: completed.
+3. Add configurable start block to listeners. Status: completed; the range replay worker is still open.
+4. Add a ledger invariant checker. Status: base checker completed; comprehensive invariant tests are still open.
+5. Freeze the webhook event schema as `v1`. Status: payload/header completed; contract tests and catalog are still open.
 
-### 30 gün
+### 30 days
 
-1. Reorg tracking: transaction reorg status, ledger reversal ve correction webhook temeli tamamlandı; block hash chain ve rollback window açık.
+1. Reorg tracking: transaction reorg status, ledger reversal and correction webhook foundation completed; block hash chain and rollback window open.
 2. Nonce/UTXO reservation: EVM nonce manager, Bitcoin UTXO lock, stuck tx replacement.
-3. Sweep state machine: pending, processing, succeeded, failed, dead-letter. Durum: temel tamamlandı; prefunding parent-job attempt/error/category state eklendi, ayrı child-job ve operator UI açık.
-4. Reconciliation job: ledger invariant job temel tamamlandı; on-chain reserve/user wallet balance karşılaştırması açık.
-5. Observability: Prometheus metrics ve alert rules.
+3. Sweep state machine: pending, processing, succeeded, failed, dead-letter. Status: foundation completed; prefunding parent-job attempt/error/category state added, separate child job and operator UI open.
+4. Reconciliation job: ledger invariant job foundation completed; on-chain reserve/user wallet balance comparison open.
+5. Observability: Prometheus metrics and alert rules.
 
-### 60 gün
+### 60 days
 
-1. KMS/HSM/MPC signer entegrasyonu ilk chainlerde canlı.
+1. KMS/HSM/MPC signer integration live on the first chains.
 2. Payout policy engine: limits, whitelist, dual approval, freeze.
-3. Chain indexer servis ayrımı için event contract ve DB boundary.
+3. Event contract and DB boundary for chain indexer service separation.
 4. Large wallet set benchmark: address matching, listener lag, DB indexes.
-5. API versioning/deprecation ve SDK/integration guide hardening.
+5. API versioning/deprecation and SDK/integration guide hardening.
 
-### 90 gün
+### 90 days
 
-1. Multi-chain production signer tüm supported chainlere yayılmış.
-2. Reorg/backfill/failover chaos testleri CI ve staging'de.
-3. Merchant settlement ve liability reporting.
-4. AML/KYT/compliance entegrasyonları veya ürün kapsam dokümanı.
-5. Controlled production launch için operational runbook ve incident drills.
+1. Multi-chain production signer rolled out to all supported chains.
+2. Reorg/backfill/failover chaos tests in CI and staging.
+3. Merchant settlement and liability reporting.
+4. AML/KYT/compliance integrations, or a product scope document.
+5. Operational runbook and incident drills for a controlled production launch.
 
-## Sonuç
+## Conclusion
 
-Bu codebase payment gateway için sağlam bir MVP tabanı oluşturmuş. Özellikle payment session, wallet üretimi, idempotency, HMAC auth, ledger entryleri, webhook ve payout/refund akışları doğru yönde.
+This codebase has established a solid MVP foundation for a payment gateway. In particular, payment sessions, wallet generation, idempotency, HMAC auth, ledger entries, webhook and payout/refund flows point in the right direction.
 
-Son düzeltmelerden sonra durable sweep, webhook retry, event versioning, configurable listener start block, reorg ledger reversal ve ledger invariant reconciliation temeli güçlendi. Buna rağmen ürün hâlâ "kusursuz" veya "Binance seviyesinde wallet tracking/custody" seviyesinde değildir. En kritik açıklar production signer, canonical rollback-window indexer, durable chain event bus, withdrawal risk policy, advanced fee/nonce/UTXO yönetimi ve on-chain reserve reconciliation tarafında kalır. Bu maddeler tamamlanmadan yüksek hacimli canlı müşteri fonu alınmamalı ve ürün "wallet provider custody" olarak pazarlanmamalı.
+After the latest fixes, the durable sweep, webhook retry, event versioning, configurable listener start block, reorg ledger reversal and ledger invariant reconciliation foundation were strengthened. Nevertheless, the product is still not at a "flawless" or "Binance-level wallet tracking/custody" level. The most critical gaps remain in the production signer, canonical rollback-window indexer, durable chain event bus, withdrawal risk policy, advanced fee/nonce/UTXO management and on-chain reserve reconciliation. Live customer funds at high volume must not be accepted and the product must not be marketed as "wallet provider custody" until these items are complete.

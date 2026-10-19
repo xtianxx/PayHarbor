@@ -1,10 +1,10 @@
 # Money Event Outbox GORM Migration Plan
 
-Bu plan `money_event_outboxes` tablosunu durable money lifecycle event kaydi icin GORM ile yonetir. Migration kaynagi raw SQL DDL degil, `models.MoneyEventOutbox` GORM tag'leri, `services/database.autoMigrateModels`, `services/database.ApplyGORMMigrations`, ve `services/database.VerifySchema` kontrolleridir.
+This plan manages the `money_event_outboxes` table through GORM for durable money-lifecycle event records. The migration source of truth is not raw SQL DDL but the `models.MoneyEventOutbox` GORM tags, `services/database.autoMigrateModels`, `services/database.ApplyGORMMigrations` and the `services/database.VerifySchema` checks.
 
 ## GORM Migration Entry Point
 
-Production migration job'u uygulama startup path'inden ayri calismalidir ve GORM entrypoint'ini cagirmalidir:
+The production migration job must run separately from the application startup path and call the GORM entrypoint:
 
 ```go
 ctx := context.Background()
@@ -18,14 +18,14 @@ if err := database.ApplyGORMMigrations(ctx, db); err != nil {
 }
 ```
 
-`ApplyGORMMigrations` sirasiyla:
+`ApplyGORMMigrations` performs these steps in order:
 
-- `db.WithContext(ctx).AutoMigrate(autoMigrateModels()...)` ile GORM model migration'larini uygular.
-- `VerifySchema(ctx, db)` ile zorunlu kolon ve index'leri GORM `Migrator` uzerinden dogrular.
+- Applies the GORM model migrations with `db.WithContext(ctx).AutoMigrate(autoMigrateModels()...)`.
+- Verifies the required columns and indexes through the GORM `Migrator` with `VerifySchema(ctx, db)`.
 
 ## GORM Model Source Of Truth
 
-`models.MoneyEventOutbox` su sozlesmenin kaynak modelidir:
+`models.MoneyEventOutbox` is the source-of-truth model for this contract:
 
 | Field | GORM-managed contract |
 | --- | --- |

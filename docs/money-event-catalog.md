@@ -1,10 +1,10 @@
 # Money Event Catalog
 
-Bu katalog Gateway'in para hareketi webhook sozlesmesini versioned ve geriye uyumlu sekilde tanimlar. Mevcut entegrasyonlarda kullanilan event adlari korunur; dotted canonical adlar yeni sozlesme hedefidir.
+This catalog defines Gateway's money-movement webhook contract in a versioned and backwards-compatible way. Event names already used by existing integrations are preserved; dotted canonical names are the target of the new contract.
 
 ## Common Envelope
 
-Her money event payload'i asagidaki ortak alanlari tasimalidir:
+Every money-event payload must carry the following common fields:
 
 | Field | Meaning |
 | --- | --- |

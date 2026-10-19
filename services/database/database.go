@@ -129,8 +129,8 @@ func InitDB() error {
 	errorOnlyLogger := logger.New(
 		log.New(os.Stderr, "\r\n", log.LstdFlags),
 		logger.Config{
-			LogLevel:                  logger.Error, // sadece Error
-			IgnoreRecordNotFoundError: true,         // record not found'u loglama
+			LogLevel:                  logger.Error, // Log errors only.
+			IgnoreRecordNotFoundError: true,         // Do not log record-not-found errors.
 			Colorful:                  false,
 		},
 	)

@@ -1,6 +1,6 @@
 # Developer Guide
 
-Language: **English** | [Türkçe](developer-guide.tr.md)
+Language: **English** | [简体中文](../README.md) — language navigation lives in the root README.
 
 This guide explains how to develop Gateway safely. Use it with the main README, the integration guide, and the module-boundary documents when opening a feature branch or reviewing a money-path change.
 

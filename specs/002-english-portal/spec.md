@@ -6,6 +6,8 @@
 
 **Status**: Accepted for the English-copy scope — implementation and runtime update complete; authenticated dashboard runtime verification remains explicitly deferred in T407.
 
+> Historical migration record: the Turkish→English portal migration described here was superseded by the bilingual (Chinese/English) language contracts in `specs/003-portal-zh-en` and `specs/004-buyer-locale-zh-en`. This document is kept as a record of that migration; it is not the current language contract.
+
 **Input**: "Default the merchant portal, admin panel, and related invoice surfaces to English." The hosted checkout keeps its existing en/tr switching and payment-language defaults; layout, interactions, routes, permissions, and business logic are untouched. No global language switcher and no i18n dependency are introduced.
 
 ## Scope
@@ -24,7 +26,7 @@
 
 **Explicitly out of scope (must remain byte-identical in behaviour):**
 
-- `views/gateway/checkout.html`, `pay.html`, `payment_result.html`, `sample_crypto-checkout.html` and the checkout/payment strings inside `api/handlers/payment.go` (`TitleTR`/`BodyTR`, status labels such as `Ödendi`, `İptal edildi`) — the existing `Lang`/`IsEnglish` switching stays as is.
+- `views/gateway/checkout.html`, `pay.html`, `payment_result.html`, `sample_crypto-checkout.html` and the checkout/payment strings inside `api/handlers/payment.go` (`TitleTR`/`BodyTR` and the frozen legacy status-label tokens) — the existing `Lang`/`IsEnglish` switching stays as is.
 - Payment/product language defaults: `data-product-language || 'tr'` in `dashboard.js` and `Product.Language` handling in `dealer.go` are behavioural fields, not display copy.
 - API contract, routes, JSON keys, form `name`/`id`, role/status enums, DB values, asset/chain identifiers, SQL, DOM selectors/`data-*` hooks, API scope values, machine error codes, logs.
 
@@ -42,35 +44,35 @@
 
 ## Terminology (recommended English glossary — for supervisor review)
 
-| Turkish (current) | Recommended English | Notes |
+| Legacy term (Chinese meaning) | Recommended English | Notes |
 | --- | --- | --- |
-| Üye işyeri | merchant | Portal-wide term; keep "merchant" consistently, never "member business" |
-| Domain / alan adı | domain | Keep the stored `domain_url` untouched |
-| Ödeme | payment | |
-| Ödeme talebi / payment link | payment request / payment link | Prefer "payment request" for API-facing lists; "payment link" only where the UI already means the hosted link |
-| Fatura | invoice | `/invoice/:token` |
-| Çekim / para çekme | withdrawal | Keep enum values (`withdrawal*`) untouched |
-| İade | refund | |
-| Süpürme / sweep | sweep | Keep `sweep_jobs`, `sweep` prefixes untouched |
-| Bakiye | balance | |
-| İşlem | transaction | Admin list header; avoid "operation" |
-| Ağ | network / chain | Prefer "network" in UI, "chain" where the stored `ChainName` is shown |
-| Cüzdan | wallet | |
-| Adres | address | |
-| Bildirim | notification | |
-| Webhook | webhook | Unchanged |
-| API anahtarı / gizli anahtar | API key / API secret | Never expose secret values |
-| Ayarlar | settings | |
-| Giriş / Çıkış | sign in / sign out | Avoid "login"/"logout" in button labels |
-| Kayıt ol | create account / sign up | Register page title: "Create your merchant account" |
-| Kaydet / İptal / Sil / Düzenle / Ara / Tümü | Save / Cancel / Delete / Edit / Search / All | Table/action verbs |
-| Durum | status | |
-| Tutar | amount | |
-| Tarih / Oluşturma | date / created | |
-| Beklemede / Tamamlandı / Başarısız / Süresi doldu | pending / completed / failed / expired | Mirrors existing status enums (values unchanged) |
-| Yönetici | admin | |
-| Doğrulama | verification | 2FA pages |
-| Manuel test | manual test | Admin tooling labels |
+| 商户 / 会员商户 | merchant | Portal-wide term; keep "merchant" consistently, never "member business" |
+| 域名 | domain | Keep the stored `domain_url` untouched |
+| 支付 | payment | |
+| 支付请求 / 支付链接 | payment request / payment link | Prefer "payment request" for API-facing lists; "payment link" only where the UI already means the hosted link |
+| 发票 | invoice | `/invoice/:token` |
+| 提现 / 取款 | withdrawal | Keep enum values (`withdrawal*`) untouched |
+| 退款 | refund | |
+| 归集 / 清扫 | sweep | Keep `sweep_jobs`, `sweep` prefixes untouched |
+| 余额 | balance | |
+| 交易 | transaction | Admin list header; avoid "operation" |
+| 网络 / 链 | network / chain | Prefer "network" in UI, "chain" where the stored `ChainName` is shown |
+| 钱包 | wallet | |
+| 地址 | address | |
+| 通知 | notification | |
+| Webhook（不变） | webhook | Unchanged |
+| API 密钥 / 密钥 | API key / API secret | Never expose secret values |
+| 设置 | settings | |
+| 登录 / 退出 | sign in / sign out | Avoid "login"/"logout" in button labels |
+| 注册 / 创建账户 | create account / sign up | Register page title: "Create your merchant account" |
+| 保存 / 取消 / 删除 / 编辑 / 搜索 / 全部 | Save / Cancel / Delete / Edit / Search / All | Table/action verbs |
+| 状态 | status | |
+| 金额 | amount | |
+| 日期 / 创建时间 | date / created | |
+| 待处理 / 已完成 / 失败 / 已过期 | pending / completed / failed / expired | Mirrors existing status enums (values unchanged) |
+| 管理员 | admin | |
+| 验证 | verification | 2FA pages |
+| 手工测试 | manual test | Admin tooling labels |
 
 Month/day names and number/date formats: use `en-US` display formatting; do not change stored timestamps.
 

@@ -151,13 +151,13 @@ func (e *BitcoinChain) BatchBalances(ctx context.Context, addresses []string, wo
 		}
 	}
 
-	// worker başlat
+	// Start workers.
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		helpers.GoSafely("balance.bitcoin", workerFunc)
 	}
 
-	// iş kuyruğuna adresleri koy
+	// Enqueue the addresses.
 enqueueBitcoin:
 	for _, addr := range addresses {
 		select {

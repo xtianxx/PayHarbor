@@ -136,11 +136,7 @@
   padding-right: 0;
 }
 
-.home-public-body header a[aria-label="Gateway Üye İşyeri Portalı"] {
-  gap: 7px;
-}
 
-.home-public-body header a[aria-label="Gateway Üye İşyeri Portalı"] > span:first-child,
 .home-public-body header a[href="/"] > span:first-child {
   width: 18px;
   height: 18px;
@@ -152,15 +148,7 @@
   box-shadow: none;
 }
 
-.home-public-body header a[aria-label="Gateway Üye İşyeri Portalı"] > span:nth-child(2) > span:first-child {
-  font-size: 12px;
-  font-weight: 850;
-  color: var(--home-primary-hover);
-}
 
-.home-public-body header a[aria-label="Gateway Üye İşyeri Portalı"] > span:nth-child(2) > span:last-child {
-  display: none;
-}
 
 .home-public-body header nav a {
   height: 38px;
@@ -981,9 +969,6 @@
     padding: 0 14px;
   }
 
-  .home-public-body header a[aria-label="Gateway Üye İşyeri Portalı"] {
-    max-width: none;
-  }
 
   .home-public-body header nav {
     width: auto !important;

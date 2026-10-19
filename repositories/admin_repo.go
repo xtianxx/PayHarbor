@@ -156,10 +156,10 @@ func (r *AdminRepo) SetPassword(ctx context.Context, id uuid.UUID, rawPassword s
 func (r *AdminRepo) Authenticate(ctx context.Context, email, rawPassword string) (*models.Admin, error) {
 	admin, err := r.FindByEmail(ctx, email)
 	if err != nil {
-		return nil, errors.New("geçersiz bilgiler")
+		return nil, errors.New("invalid credentials")
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(admin.Password), []byte(rawPassword)); err != nil {
-		return nil, errors.New("geçersiz bilgiler")
+		return nil, errors.New("invalid credentials")
 	}
 	return admin, nil
 }

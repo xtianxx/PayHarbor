@@ -313,13 +313,13 @@ func (e *SolanaChain) BatchBalances(ctx context.Context, addresses []string, wor
 		}
 	}
 
-	// worker başlat
+	// Start workers.
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		helpers.GoSafely("balance.solana", workerFunc)
 	}
 
-	// iş kuyruğuna adresleri koy
+	// Enqueue the addresses.
 enqueueSolana:
 	for _, addr := range addresses {
 		select {

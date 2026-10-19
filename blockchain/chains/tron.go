@@ -156,13 +156,13 @@ func (e *TronChain) BatchBalances(ctx context.Context, addresses []string, worke
 		}
 	}
 
-	// worker başlat
+	// Start workers.
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		helpers.GoSafely("balance.tron", workerFunc)
 	}
 
-	// iş kuyruğuna adresleri koy
+	// Enqueue the addresses.
 	for _, addr := range addresses {
 		jobs <- addr
 	}

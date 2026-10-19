@@ -1,23 +1,29 @@
 # Blockchain Architecture Audit
 
-Tarih: 2026-06-28
+> **Historical assessment as of 2026-06-28, not current acceptance or security certification.**
+> The findings below record the state of the codebase at that date, including items that have since
+> changed (for example how a sweep broadcast is released). They are kept as engineering history and
+> must not be read as the current implementation or as a statement that the gaps are fixed. For the
+> current engineering status and limitations, see the root README.
 
-Rol: Senior Blockchain Architect
+Date: 2026-06-28
 
-Kapsam:
-- Repository'deki Go kodu incelendi.
-- `third_party/trustwallet/wallet-core/samples/go/**` altındaki generated/proto/sample kod platform implementasyonu olarak kabul edilmedi. Sadece uygulamanin `blockchain/walletcore` wrapper'i uzerinden kullandigi davranis dikkate alindi.
-- Bu rapor kaynak kod degisikligi onermez ve kodda olmayan bir ozelligi mevcutmus gibi varsaymaz.
+Role: Senior Blockchain Architect
+
+Scope:
+- The Go code in the repository was reviewed.
+- Generated/proto/sample code under `third_party/trustwallet/wallet-core/samples/go/**` was not treated as platform implementation; only the behavior the application uses through its `blockchain/walletcore` wrapper was considered.
+- This report does not propose source-code changes and does not assume a feature exists that is absent from the code.
 
 ## 1. HD Wallet
 
-Mevcut implementasyon:
-- HD wallet kaynagi `MNEMONIC_PHRASE` ortam degiskenidir. `BaseChain.GetMnemonicForPath` signer policy kontrolu yapar, sonra mnemonic'i env'den okur ve validate eder.
-- `BaseChain.GetDerivedWallet` Trust Wallet Core wrapper'i ile address/private key derive eder ve `WalletDetails` icinde `Address`, `PrivateKey`, `MnemonicPhrase`, `KeyReference`, `DerivationPath`, `SignerMode` dondurur.
-- Domain seviyesinde `HDAccountID`, wallet seviyesinde `HDAddressId` tutulur. Merchant reserve wallet `HDAddressId = 0` olarak olusturulur.
-- Production modunda software signer bloklanir; external signer modlari taninir ama aktif adapter yoktur, `Authorize` hata dondurur.
+Current implementation:
+- The HD wallet source is the `MNEMONIC_PHRASE` environment variable. `BaseChain.GetMnemonicForPath` performs the signer policy check, then reads and validates the mnemonic from the environment.
+- `BaseChain.GetDerivedWallet` derives the address/private key with the Trust Wallet Core wrapper and returns `Address`, `PrivateKey`, `MnemonicPhrase`, `KeyReference`, `DerivationPath` and `SignerMode` inside `WalletDetails`.
+- `HDAccountID` is stored at domain level and `HDAddressId` at wallet level. The merchant reserve wallet is created with `HDAddressId = 0`.
+- In production mode the software signer is blocked; external signer modes are recognized but no adapter is active and `Authorize` returns an error.
 
-Dosya:
+Files:
 - `blockchain/basechain.go`
 - `blockchain/walletcore/provider.go`
 - `blockchain/walletcore/provider_trustwalletcore.go`
@@ -26,7 +32,7 @@ Dosya:
 - `repositories/wallet_repo.go`
 - `services/signer/policy.go`
 
-Fonksiyon:
+Functions:
 - `BaseChain.GetMnemonicForPath`
 - `BaseChain.GetDerivedWallet`
 - `walletcore.DeriveWallet`
@@ -37,32 +43,32 @@ Fonksiyon:
 - `WalletRepo.CreateReserveWallet`
 - `signer.Authorize`
 
-Eksik:
-- External signer/KMS/HSM/MPC adapter kontrati var; gercek provider implementasyonu ve chain-specific external signing henuz yok.
-- xpub/public-only derivation yok.
-- Mnemonic rotation, seed versioning veya key custody migration akisi yok.
-- Derivation metadata'si merkezi ve versioned bir path registry olarak modellenmemis.
+Gaps:
+- The external signer/KMS/HSM/MPC adapter contract exists, but a real provider implementation and chain-specific external signing do not yet exist.
+- There is no xpub/public-only derivation.
+- There is no mnemonic rotation, seed versioning or key custody migration flow.
+- Derivation metadata is not modeled as a central, versioned path registry.
 
 Risk:
-- Mnemonic ve private key process memory'sine giriyor. `WalletDetails` private key ve mnemonic tasiyor.
-- Production'da software signer kapaliysa mevcut derivation/signing yolu calismayabilir; external signer modlari adapter olmadigi icin gercek custody alternatifi saglamiyor.
-- Seed/path degisimi veya migration durumunda eski adresleri deterministik olarak yonetmek zorlasir.
+- The mnemonic and private key enter process memory. `WalletDetails` carries the private key and mnemonic.
+- If the software signer is disabled in production, the current derivation/signing path may not work; the external signer modes provide no real custody alternative because there is no adapter.
+- Managing old addresses deterministically becomes difficult in case of seed/path changes or migration.
 
-Oneri:
-- Software signer'i sadece development/test icin tutup production icin gercek external signer adapter implementasyonlarini ekleyin.
-- Address derivation'i mumkunse xpub/public derivation uzerinden yapin; private key sadece signing boundary'sinde uretilsin veya hic process'e alinmasin.
-- Path scheme, seed/key version ve signer mode bilgilerini kalici ve audit edilebilir bir wallet derivation registry'de saklayin.
+Recommendations:
+- Keep the software signer for development/test only and add real external signer adapter implementations for production.
+- Derive addresses from xpub/public derivation where possible; the private key should be produced only at the signing boundary, or never enter the process at all.
+- Store the path scheme, seed/key version and signer mode in a durable, auditable wallet derivation registry.
 
 ## 2. Address Derivation
 
-Mevcut implementasyon:
-- EVM ve EVM-compatible chain'ler `m/44'/60'/{hdAccountId}'/0/{hdWalletId}` path'ini kullanir. Ethereum, Base, Arbitrum, Unichain, Avalanche, BNB Chain, Chiliz ve Chiliz Spicy ayni coin type `60` ile adres turetir.
-- Bitcoin `m/86'/0'/0'/{hdAccountId}/{hdWalletId}` path'ini kullanir. Trust Wallet Core tarafinda Bitcoin adresi Taproot derivation ile uretilir.
-- TRON ve TRON testnet `m/44'/195'/0'/{hdAccountId}/{hdWalletId}` path'ini kullanir.
-- Solana `m/44'/501'/{hdAccountId}'/{hdWalletId}'` path'ini kullanir.
-- Wallet kaydinda her chain icin kolon bazli adres tutulur. TRON ve TRONTestnet ayni `TronAddress` alanina map edilir.
+Current implementation:
+- EVM and EVM-compatible chains use the `m/44'/60'/{hdAccountId}'/0/{hdWalletId}` path. Ethereum, Base, Arbitrum, Unichain, Avalanche, BNB Chain, Chiliz and Chiliz Spicy derive addresses with the same coin type `60`.
+- Bitcoin uses the `m/86'/0'/0'/{hdAccountId}/{hdWalletId}` path. On the Trust Wallet Core side the Bitcoin address is produced with Taproot derivation.
+- TRON and TRON testnet use the `m/44'/195'/0'/{hdAccountId}/{hdWalletId}` path.
+- Solana uses the `m/44'/501'/{hdAccountId}'/{hdWalletId}'` path.
+- The wallet record keeps a column-based address per chain. TRON and TRONTestnet map to the same `TronAddress` field.
 
-Dosya:
+Files:
 - `blockchain/basechain.go`
 - `blockchain/chains/ethereum.go`
 - `blockchain/chains/evm_compatible.go`
@@ -72,7 +78,7 @@ Dosya:
 - `repositories/wallet_repo.go`
 - `workers/indexer/address_index.go`
 
-Fonksiyon:
+Functions:
 - `BaseChain.GetDerivedPath`
 - `EthereumChain.CreateHDWallet`
 - `EVMCompatibleChain.CreateHDWallet`
@@ -84,36 +90,36 @@ Fonksiyon:
 - `WalletAddressForChainID`
 - `AddressIndex.Load`
 
-Eksik:
-- Chain/path/version bilgisini zorunlu hale getiren merkezi path registry yok.
-- Bitcoin path'i BIP86 account/change/index yerlesiminden farkli kullaniliyor; `hdAccountId` change segmentine yerlestirilmis.
-- TRON mainnet/testnet icin ayri adres kolonu veya ayri derivation namespace'i yok.
-- Address derivation fallback build'i address turetemiyor; `walletcorefallback` build'inde `DeriveWallet` hata donduruyor.
+Gaps:
+- There is no central path registry that makes chain/path/version information mandatory.
+- The Bitcoin path is used differently from the BIP86 account/change/index layout; `hdAccountId` is placed in the change segment.
+- There is no separate address column or derivation namespace for TRON mainnet/testnet.
+- The address derivation fallback build cannot derive addresses; `DeriveWallet` returns an error in the `walletcorefallback` build.
 
 Risk:
-- Bitcoin path semantigi standart wallet tooling ile uyumsuz olabilir.
-- TRON mainnet ve testnet ayni adres alanini kullandigi icin testnet/mainnet operasyonel karisikligi olusabilir.
-- EVM chain'lerde ayni address'in birden fazla chain'de kullanilmasi privacy ve operational isolation riskidir.
-- Yeni chain eklemek wallet schema, lookup, repo ve factory tarafinda cok noktali degisiklik gerektirir.
+- Bitcoin path semantics may be incompatible with standard wallet tooling.
+- Because TRON mainnet and testnet use the same address field, testnet/mainnet operational confusion is possible.
+- Reusing the same address on multiple EVM chains is a privacy and operational isolation risk.
+- Adding a new chain requires multi-point changes across the wallet schema, lookup, repo and factory.
 
-Oneri:
-- Her chain icin explicit `derivation_scheme_version`, `purpose`, `coin_type`, `account`, `change`, `index` metadata'si saklayin.
-- TRON mainnet/testnet adreslerini chain-id bazli normalized address tablosunda ayirin.
-- Bitcoin path uyumlulugunu BIP86 standardina gore yeniden degerlendirin; degisim gerekiyorsa versioned migration yapin.
+Recommendations:
+- Store explicit `derivation_scheme_version`, `purpose`, `coin_type`, `account`, `change` and `index` metadata per chain.
+- Separate TRON mainnet/testnet addresses in a chain-id-based normalized address table.
+- Re-evaluate Bitcoin path compatibility against the BIP86 standard; if a change is required, do it with a versioned migration.
 
 ## 3. Gap Limit
 
-Mevcut implementasyon:
-- Kodda BIP44/BIP86 tarzinda gap-limit discovery veya seed restore address scanning implementasyonu bulunmadi.
-- Address uretimi DB-driven calisiyor: domain ve wallet kaydi olustukca `HDAddressId` allocate ediliyor, sonra chain adresleri derive edilip wallet tablosuna yaziliyor.
-- Address lookup icin preload mekanizmasi var; varsayilan `-1` tum ownership kayitlarini yukler ve index'i authoritative yapar.
+Current implementation:
+- No BIP44/BIP86-style gap-limit discovery or seed-restore address scanning implementation exists in the code.
+- Address generation is DB-driven: as domain and wallet records are created, `HDAddressId` is allocated, then the chain addresses are derived and written to the wallet table.
+- A preload mechanism exists for address lookup; the default `-1` loads all ownership records and makes the index authoritative.
 
-Dosya:
+Files:
 - `repositories/wallet_repo.go`
 - `repositories/domain_repo.go`
 - `workers/indexer/address_index.go`
 
-Fonksiyon:
+Functions:
 - `WalletRepo.getNextHDIndex`
 - `WalletRepo.Create`
 - `WalletRepo.EnsureAllAddresses`
@@ -121,32 +127,32 @@ Fonksiyon:
 - `AddressIndex.Load`
 - `addressIndexPreloadLimit`
 
-Eksik:
-- Kullanilmamis adres araligi tarama yok.
-- Seed restore veya DB kaybi sonrasinda chain uzerinden adres kesfi yok.
-- Gap limit degeri, scan cursor'u veya per-chain discovery state yok.
+Gaps:
+- There is no unused-address-range scanning.
+- There is no address discovery on the chain after a seed restore or DB loss.
+- There is no gap limit value, scan cursor or per-chain discovery state.
 
 Risk:
-- DB'de wallet row'u yoksa, seed ile turetilmis olsa bile adres izlenmez.
-- Backfill sadece mevcut wallet row'lari icin adres turetir; harici veya kayip index araligini bulmaz.
-- `ADDRESS_INDEX_PRELOAD_LIMIT` unset/default `-1` iken eksiksiz ve authoritative bellek index'i yuklenir. `0` veya sonlu bir limit kullanilirsa index authoritative sayilmaz ve listener'lar false-negative ya da event basina DB sorgusu uretmek yerine fail-closed kalir.
+- If a wallet row is absent from the DB, the address is not monitored even if it was derived from the seed.
+- Backfill derives addresses only for existing wallet rows; it does not find external or lost index ranges.
+- When `ADDRESS_INDEX_PRELOAD_LIMIT` is unset/default `-1`, the complete and authoritative in-memory index is loaded. If `0` or a finite limit is used, the index is not considered authoritative and listeners stay fail-closed instead of producing false negatives or one DB query per event.
 
-Oneri:
-- Urun gereksinimi varsa per-domain/per-chain gap-limit scanner ekleyin.
-- Gap scanner yoksa bunu acik bir invariant olarak dokumante edin: "sadece DB'de olusturulmus adresler izlenir".
-- Address discovery state'i ve son taranan index'leri kalici tabloda tutun.
+Recommendations:
+- Add a per-domain/per-chain gap-limit scanner if the product requires it.
+- If there is no gap scanner, document it as an explicit invariant: "only addresses already created in the DB are monitored".
+- Keep address discovery state and last scanned indexes in a durable table.
 
 ## 4. Watcher
 
-Mevcut implementasyon:
-- Startup'ta her chain icin listener olusturuluyor ve dispatcher bus'a subscribe ediliyor. Bus subscriber yalniz kayitli asset icin confirmed, pozitif, platform-owned `To` transferini kabul eder; ayni merchant'a ait custody adresleri arasindaki hareketi eler ve ancak bundan sonra chain fact kaydi yapar.
-- EVM listener HTTP JSON-RPC polling ile blok tarar; native tx, ERC-20 log ve opsiyonel `trace_block` internal transfer uretir.
-- Bitcoin listener Blockstream/mempool.space REST API uzerinden confirmed bloklari ve vout'lari tarar.
-- TRON listener gRPC fullnode uzerinden blok ve transaction info tarar; TRC-20 loglari transaction info varsa isler.
-- Solana listener finalized slot/block tarar. System transferleri uretir; SPL transferlerinde token-account owner/mint/program/decimals bilgisini pre/post token balance metadata'sindan strict olarak cozer. Diger program call adaylari sifir tutar filtresinde DB persistence oncesi elenir.
-- Listener'lar `ChainState.LastProcessedBlock` ve `LastConfirmedBlock` alanlarini gunceller.
+Current implementation:
+- At startup a listener is created for every chain and subscribed to the dispatcher bus. The bus subscriber accepts only confirmed, positive, platform-owned `To` transfers for a registered asset; it eliminates movement between custody addresses of the same merchant and only then writes a chain fact record.
+- The EVM listener scans blocks with HTTP JSON-RPC polling; it produces native tx, ERC-20 log and optional `trace_block` internal transfers.
+- The Bitcoin listener scans confirmed blocks and vouts through the Blockstream/mempool.space REST API.
+- The TRON listener scans blocks and transaction info through the gRPC fullnode; it processes TRC-20 logs when transaction info is present.
+- The Solana listener scans finalized slots/blocks. It produces system transfers; for SPL transfers it strictly resolves token-account owner/mint/program/decimals information from pre/post token balance metadata. Other program call candidates are eliminated before DB persistence in the zero-amount filter.
+- Listeners update the `ChainState.LastProcessedBlock` and `LastConfirmedBlock` fields.
 
-Dosya:
+Files:
 - `main.go`
 - `workers/listeners/evm/listener.go`
 - `workers/listeners/bitcoin/bitcoin.go`
@@ -154,7 +160,7 @@ Dosya:
 - `workers/listeners/solana/listener.go`
 - `blockchain/basechain.go`
 
-Fonksiyon:
+Functions:
 - `startChainInfrastructure`
 - `handleChainIndexerEvent`
 - `recordChainFactObservation`
@@ -169,68 +175,68 @@ Fonksiyon:
 - `BaseChain.StartWorkers`
 - `BaseChain.Work`
 
-Eksik:
-- Mempool watcher yok.
-- Listener seviyesinde aktif reorg rollback/replay yok.
-- Listener'lar RPC tarafinda bloktaki aday olaylari genel olarak tarar; DB persistence sinirinda eksiksiz in-memory address index ile wallet ownership filtresi uygulanir. Index authoritative degilse listener altyapisi fail-closed kalir.
-- EVM WebSocket watcher startup path'inde kullanilmiyor. `workers/listeners/chiliz` altinda WS listener var, fakat `startChainInfrastructure` default path'te EVM listener'i seciliyor.
+Gaps:
+- There is no mempool watcher.
+- There is no active reorg rollback/replay at listener level.
+- Listeners scan candidate events in a block broadly on the RPC side; the wallet ownership filter is applied at the DB persistence boundary with a complete in-memory address index. If the index is not authoritative, the listener infrastructure stays fail-closed.
+- The EVM WebSocket watcher is not used in the startup path. A WS listener exists under `workers/listeners/chiliz`, but `startChainInfrastructure` selects the EVM listener in the default path.
 
 Risk:
-- Full block scanning yuksek hacimli chain'lerde RPC ve CPU maliyetini buyutur; ilgisiz aday olaylar merkezi filtreden sonra DB'ye yazilmaz.
-- `LastProcessedBlock` bozuk veya reorglu hale gelirse otomatik geri sarma yok.
-- `trace_block` olmayan EVM provider'larda internal transferler atlanabilir; capability/fetch hatasi loglanir, `REQUIRE_EVM_TRACE=true` ise listener checkpoint'i ilerletmez.
-- Baslangic state'i yoksa listener varsayilan olarak son safe head civarindan baslar; gecmis bloklar otomatik taranmaz.
+- Full block scanning increases RPC and CPU cost on high-volume chains; unrelated candidate events are not written to the DB after the central filter.
+- If `LastProcessedBlock` becomes corrupt or reorged there is no automatic rollback.
+- Internal transfers may be skipped on EVM providers without `trace_block`; a capability/fetch error is logged, and with `REQUIRE_EVM_TRACE=true` the listener does not advance its checkpoint.
+- When there is no starting state, the listener starts near the last safe head by default; past blocks are not scanned automatically.
 
-Oneri:
-- Watcher icin per-chain replay window ve reorg-aware checkpoint tasarlayin.
-- Address-interest filtering veya staged raw event pipeline ekleyin.
-- EVM icin provider capability kontrolu ve trace gereksinimini chain/asset bazinda explicit hale getirin.
+Recommendations:
+- Design a per-chain replay window and reorg-aware checkpoints for the watcher.
+- Add address-interest filtering or a staged raw event pipeline.
+- Make the provider capability check and trace requirement explicit per chain/asset for EVM.
 
 ## 5. Mempool
 
-Mevcut implementasyon:
-- Kodda mempool subscription, pending tx watcher veya txpool takip implementasyonu bulunmadi.
-- Bitcoin balance sorgusu `mempool_stats` dahil ederek balance string'i hesapliyor.
-- EVM transferlerde nonce kaynagi olarak `PendingNonceAt` kullaniliyor.
-- Sweep hata siniflandirmasinda `"mempool"` string'i broadcast belirsizligi olarak ele aliniyor.
+Current implementation:
+- No mempool subscription, pending tx watcher or txpool tracking implementation exists in the code.
+- The Bitcoin balance query computes the balance string including `mempool_stats`.
+- EVM transfers use `PendingNonceAt` as the nonce source.
+- In sweep failure classification the string `"mempool"` is treated as broadcast uncertainty.
 
-Dosya:
+Files:
 - `blockchain/chains/bitcoin.go`
 - `blockchain/chains/evm_transfer.go`
 - `main.go`
 - `repositories/withdrawal_request_repo.go`
 
-Fonksiyon:
+Functions:
 - `BitcoinChain.getBalance`
 - `evmSendNativeWithClient`
 - `evmSendERC20WithClient`
 - `sweepFailureBroadcastUncertain`
 
-Eksik:
-- Pending deposit detection yok.
-- Pending outbound tx replacement/speed-up/cancel yok.
-- Bitcoin mempool UTXO takibi yok; transfer/sweep sadece confirmed UTXO kullaniyor.
-- EVM txpool reconciliation yok.
+Gaps:
+- No pending deposit detection.
+- No pending outbound tx replacement/speed-up/cancel.
+- No Bitcoin mempool UTXO tracking; transfer/sweep uses confirmed UTXOs only.
+- No EVM txpool reconciliation.
 
 Risk:
-- Kullanici pending deposit gorunurlugu alamaz.
-- Outbound broadcast belirsizliginde sistem tx'in mempool durumunu aktif dogrulamaz.
-- Nonce gap veya stuck transaction durumlari operator/reconciliation isine kalir.
+- The user gets no pending deposit visibility.
+- On outbound broadcast uncertainty the system does not actively verify the tx's mempool state.
+- Nonce gap or stuck-transaction situations fall to operator/reconciliation work.
 
-Oneri:
-- Mempool izleme gerekiyorsa chain bazli pending tx pipeline'i ekleyin.
-- EVM icin tx replacement policy, fee bump ve txpool lookup ekleyin.
-- Bitcoin icin unconfirmed UTXO kullanilmamasi bilincli politika ise dokumante edin.
+Recommendations:
+- Add a chain-based pending tx pipeline if mempool monitoring is required.
+- Add a tx replacement policy, fee bump and txpool lookup for EVM.
+- If not using unconfirmed UTXOs is a deliberate policy for Bitcoin, document it.
 
 ## 6. Confirmations
 
-Mevcut implementasyon:
-- Confirmation requirement env ile override edilebilir; default degerler Bitcoin 3, Solana 1, TRON/TRONTestnet 20, diger chain'ler 12.
-- EVM watcher 12 blok geriden, Bitcoin 6 blok geriden, TRON 2 blok geriden isler; Solana finalized commitment kullanir.
-- Deposit service chain state'e gore confirmations hesaplar ve `fact.Finalized = confirmations >= required` olarak gunceller.
-- Transaction finality worker pending transaction'lari `MarkFinality` ile pending/confirmed durumuna ceker.
+Current implementation:
+- The confirmation requirement can be overridden by env; default values are Bitcoin 3, Solana 1, TRON/TRONTestnet 20, other chains 12.
+- The EVM watcher works 12 blocks behind, Bitcoin 6 blocks behind, TRON 2 blocks behind; Solana uses finalized commitment.
+- The deposit service computes confirmations from chain state and updates `fact.Finalized = confirmations >= required`.
+- The transaction finality worker pulls pending transactions into pending/confirmed state with `MarkFinality`.
 
-Dosya:
+Files:
 - `main.go`
 - `services/deposits/service.go`
 - `repositories/transaction_repo.go`
@@ -241,7 +247,7 @@ Dosya:
 - `workers/listeners/tron/tron.go`
 - `workers/listeners/solana/listener.go`
 
-Fonksiyon:
+Functions:
 - `chainConfirmationRequirement`
 - `transactionConfirmations`
 - `finalizePendingTransactions`
@@ -252,29 +258,29 @@ Fonksiyon:
 - `ChainFactRepo.Record`
 - `ChainFactRepo.RecordOrUpdate`
 
-Eksik:
-- Chain-specific finality semantics, fork choice veya probabilistic finality modeli yok; sadece block height farki kullaniliyor.
-- `ChainFactRepo.Record` duplicate event icin confirmations/finality update etmez; sadece `RecordOrUpdate` bunu yapar.
-- Confirmation policy ve listener safe lag degerleri ayni merkezi config'te tutulmuyor.
+Gaps:
+- There is no chain-specific finality semantics, fork choice or probabilistic finality model; only block height difference is used.
+- `ChainFactRepo.Record` does not update confirmations/finality for a duplicate event; only `RecordOrUpdate` does that.
+- Confirmation policy and listener safe lag values are not kept in the same central config.
 
 Risk:
-- Finality ve watcher safe lag ayarlari birbirinden kopuk oldugu icin chain bazli operasyonel hata riski var.
-- Duplicate chain fact'lerin normal listener akisiyle confirmation metadata'si guncellenmez; deposit service bunu chain state'ten telafi ediyor, fakat chain_fact kaydi kendi basina stale kalabilir.
-- TRON watcher 2 blok geriden event uretirken finality default 20; bu dogru olabilir ama policy acik dokumante edilmezse erken event/finality beklentisi karisir.
+- Finality and watcher safe lag settings are disconnected from each other, creating a chain-based operational error risk.
+- Confirmation metadata of duplicate chain facts is not updated by the normal listener flow; the deposit service compensates from chain state, but the chain_fact record itself can remain stale.
+- The TRON watcher produces events 2 blocks behind while the finality default is 20; this may be correct, but if the policy is not documented explicitly, early event/finality expectations become confusing.
 
-Oneri:
-- Per-chain finality policy dosyasi/registry olusturun.
-- Chain fact confirmation update davranisini listener ve rescan yollarinda tutarli hale getirin.
-- Finality hesaplamasini block hash/fork state ile birlikte modelleyin.
+Recommendations:
+- Create a per-chain finality policy file/registry.
+- Make chain fact confirmation update behavior consistent across listener and rescan paths.
+- Model the finality calculation together with block hash/fork state.
 
 ## 7. Reorg
 
-Mevcut implementasyon:
-- Transaction repository block identity degisimlerini ve canonical block conflict'lerini yakalayacak kod iceriyor.
-- Conflict durumunda transaction reorged yapiliyor, ledger reversal post ediliyor, payment/deposit/chain_fact reorged isaretleniyor, ilgili pending/processing/failed sweep job'lar dead-letter oluyor ve reconciliation job aciliyor.
-- Block tablosunda canonical/reorged status alanlari kullaniliyor.
+Current implementation:
+- The transaction repository contains code to catch block identity changes and canonical block conflicts.
+- On a conflict the transaction is marked reorged, a ledger reversal is posted, payment/deposit/chain_fact are marked reorged, the related pending/processing/failed sweep jobs are dead-lettered and a reconciliation job is opened.
+- Canonical/reorged status fields are used in the block table.
 
-Dosya:
+Files:
 - `repositories/transaction_repo.go`
 - `repositories/chain_fact_repo.go`
 - `repositories/deposit_repo.go`
@@ -282,7 +288,7 @@ Dosya:
 - `main.go`
 - `services/deposits/service.go`
 
-Fonksiyon:
+Functions:
 - `TransactionRepo.Create`
 - `observeCanonicalBlockWithDB`
 - `markBlockHashConflictsWithDB`
@@ -294,32 +300,32 @@ Fonksiyon:
 - `transactionParamFromChainFact`
 - `chainFactMetadata`
 
-Eksik:
-- Listener seviyesinde canonical chain reorg detector ve rollback yok.
-- ChainState'i reorg noktasina geri alma ve replay mekanizmasi yok.
-- Deposit service tarafinda `transactionParamFromChainFact` parent hash okumaya calisiyor, ancak `chainFactMetadata` sadece `from` ve `to` alanlarini parse ediyor; `parent_hash` metadata'si transaction'a tasinmiyor.
-- Reorg detection, yeni bir conflicting transaction/fact gorulmesine bagli; sadece block header zinciri dogrulayan bagimsiz worker yok.
+Gaps:
+- No canonical chain reorg detector and rollback at listener level.
+- No mechanism to rewind ChainState to the reorg point and replay.
+- On the deposit service side `transactionParamFromChainFact` tries to read the parent hash, but `chainFactMetadata` only parses the `from` and `to` fields; the `parent_hash` metadata is not carried into the transaction.
+- Reorg detection depends on seeing a new conflicting transaction/fact; there is no independent worker that validates only the block header chain.
 
 Risk:
-- Parent hash conflict detection chain_fact -> transaction yolunda pratikte devre disi kalabilir.
-- Bir reorg deposit transaction'ini ortadan kaldirir ama sistem yeni conflicting event gormezse eski kayit kalabilir.
-- Reorg sonrasi sweep/payments tarafinda reconciliation acilsa da operasyon manuel cozum gerektirebilir.
+- Parent hash conflict detection can effectively be disabled on the chain_fact -> transaction path.
+- If a reorg removes a deposit transaction but the system never sees a new conflicting event, the old record can remain.
+- Even though reconciliation is opened on the sweep/payments side after a reorg, operations may require manual resolution.
 
-Oneri:
-- `chainFactMetadata` parent hash'i de parse etmeli ve transaction param'a tasimali.
-- Listener'lara kucuk bir rolling replay window ve canonical parent hash kontrolu ekleyin.
-- ChainState rollback ve deterministic replay akisini repository seviyesinde idempotent hale getirin.
+Recommendations:
+- `chainFactMetadata` should also parse the parent hash and carry it into the transaction param.
+- Add a small rolling replay window and canonical parent hash check to listeners.
+- Make ChainState rollback and the deterministic replay flow idempotent at repository level.
 
 ## 8. Sweeping
 
-Mevcut implementasyon:
-- Finalized deposit icin durable `SweepJob` olusturuluyor. Reserve wallet merchant bazinda `_reserve_` domain ve `HDAddressId = 0` ile kullaniliyor.
-- Sweep worker due job'lari claim eder, ledger sweep hold olusturur, user wallet'i yeniden derive eder, reserve wallet adresine transfer yapar, basarida job'u succeeded yapar ve ledger sweep release post eder.
-- Token deposit'lerde gas prefund denenir; sonra `WithdrawToken` ile deposit amount reserve adrese gonderilir.
-- Native TRON deposit'lerde `SweepTo` ile full native sweep kullanilir. Diger native chain'lerde `Withdraw` ile sadece transaction amount gonderilir.
-- Chain seviyesinde EVM/BTC/Solana full native `SweepTo`, EVM/TRON/Solana token `SweepERC20To` fonksiyonlari var; auto sweep deposit path'i bunlari her chain icin kullanmiyor.
+Current implementation:
+- A durable `SweepJob` is created for a finalized deposit. The reserve wallet is used per merchant with the `_reserve_` domain and `HDAddressId = 0`.
+- The sweep worker claims due jobs, creates a ledger sweep hold, re-derives the user wallet, transfers to the reserve wallet address, marks the job succeeded on success and posts the ledger sweep release.
+- For token deposits a gas prefund is attempted; then the deposit amount is sent to the reserve address with `WithdrawToken`.
+- For native TRON deposits a full native sweep is used with `SweepTo`. On other native chains only the transaction amount is sent with `Withdraw`.
+- At chain level there are full native `SweepTo` functions for EVM/BTC/Solana and `SweepERC20To` for EVM/TRON/Solana tokens; the auto-sweep deposit path does not use them for every chain.
 
-Dosya:
+Files:
 - `main.go`
 - `repositories/sweep_job_repo.go`
 - `repositories/ledger_repo.go`
@@ -329,7 +335,7 @@ Dosya:
 - `blockchain/chains/tron_transfer.go`
 - `blockchain/chains/solana_transfer.go`
 
-Fonksiyon:
+Functions:
 - `enqueueSweepJob`
 - `executeAutoSweepDeposit`
 - `executeAutoSweepDepositWithJob`
@@ -349,34 +355,34 @@ Fonksiyon:
 - `SolanaChain.SweepTo`
 - `SolanaChain.SweepERC20To`
 
-Eksik:
-- Sweep tx finality tracking yok; ledger release broadcast basarisindan hemen sonra post ediliyor.
-- EVM/BTC/Solana native deposit auto sweep full balance sweep yapmiyor; sadece deposit amount transfer ediyor.
-- Token auto sweep deposit amount ile sinirli; full token consolidation kullanilmiyor.
-- Broadcast sonrasi stuck sweep tx icin chain bazli confirmation/replacement workflow yok.
+Gaps:
+- No sweep tx finality tracking; the ledger release is posted immediately after a successful broadcast.
+- EVM/BTC/Solana native deposit auto sweep does not perform a full balance sweep; it transfers only the deposit amount.
+- Token auto sweep is limited to the deposit amount; no full token consolidation is used.
+- There is no chain-based confirmation/replacement workflow for a stuck sweep tx after broadcast.
 
 Risk:
-- Sweep tx broadcast edilip chain'de fail/reorg olursa ledger release on-chain gerceklikten once yazilmis olabilir.
-- User deposit adreslerinde dust, change veya ekstra bakiye kalabilir.
-- Gas prefund sonrasi sadece 5 saniye bekleniyor; prefund finality/availability garanti degil.
-- Broadcast belirsizligi dead-letter ve reconciliation'a dusuyor; otomatik on-chain kesinlestirme yok.
+- If a sweep tx is broadcast and then fails/reorgs on chain, the ledger release may already have been written before on-chain reality.
+- Dust, change or extra balance can remain on user deposit addresses.
+- After a gas prefund only 5 seconds are waited; prefund finality/availability is not guaranteed.
+- Broadcast uncertainty falls to dead-letter and reconciliation; there is no automatic on-chain confirmation.
 
-Oneri:
-- Sweep tx'leri de normal transaction/finality pipeline'ina alin; ledger release'i finality sonrasi post edin.
-- Native ve token sweep politikasini chain bazinda explicit yapin: amount sweep mi, full consolidation mi.
-- Broadcast belirsizligi icin tx hash lookup, replacement ve retry stratejisi ekleyin.
+Recommendations:
+- Bring sweep txs into the normal transaction/finality pipeline too; post the ledger release after finality.
+- Make the native and token sweep policy explicit per chain: amount sweep or full consolidation.
+- Add a tx hash lookup, replacement and retry strategy for broadcast uncertainty.
 
 ## 9. Gas Management
 
-Mevcut implementasyon:
-- EVM transferler legacy transaction mode kullanir, `SuggestGasPrice` ile gas price alir. Native gas limit 21000, ERC-20 gas limit 65000 sabittir.
-- EVM gas policy sadece gas price pozitifligini ve opsiyonel `EVM_MAX_GAS_PRICE_WEI` cap'ini kontrol eder.
-- EVM token sweep icin native balance threshold/prefund env ile belirlenir.
-- Bitcoin fee rate env tabanlidir: `BITCOIN_FEE_RATE_SAT_PER_VBYTE`; min/max cap vardir.
-- TRON TRC-20 fee limit env tabanlidir; native sweep bandwidth fee tahmini yapar ve fallback fee kullanir.
-- Solana transfer fee sabit env degeridir; default 5000 lamports.
+Current implementation:
+- EVM transfers use legacy transaction mode and take the gas price with `SuggestGasPrice`. Native gas limit is fixed at 21000, ERC-20 gas limit at 65000.
+- The EVM gas policy checks only gas price positivity and the optional `EVM_MAX_GAS_PRICE_WEI` cap.
+- The native balance threshold/prefund for EVM token sweep is determined by env.
+- The Bitcoin fee rate is env-based: `BITCOIN_FEE_RATE_SAT_PER_VBYTE`; there are min/max caps.
+- The TRON TRC-20 fee limit is env-based; the native sweep estimates a bandwidth fee and uses a fallback fee.
+- The Solana transfer fee is a fixed env value; default 5000 lamports.
 
-Dosya:
+Files:
 - `blockchain/chains/evm_transfer.go`
 - `blockchain/chains/bitcoin_transfer.go`
 - `blockchain/chains/tron_transfer.go`
@@ -384,7 +390,7 @@ Dosya:
 - `blockchain/chains/solana_transfer.go`
 - `services/chainresource/policy.go`
 
-Fonksiyon:
+Functions:
 - `evmSendNativeWithClient`
 - `evmSendERC20WithClient`
 - `evmSignNativeWithTrustWallet`
@@ -399,32 +405,32 @@ Fonksiyon:
 - `solanaTransferFeeLamports`
 - `PrefundGas`
 
-Eksik:
-- EVM EIP-1559 `maxFeePerGas` / `maxPriorityFeePerGas` yok.
-- EVM gas estimation (`EstimateGas`) yok.
-- Fee bump/speed-up/cancel yok.
-- Bitcoin dynamic fee estimation ve RBF policy yok.
-- Solana priority fee/compute budget/rent dynamic handling yok.
+Gaps:
+- No EVM EIP-1559 `maxFeePerGas` / `maxPriorityFeePerGas`.
+- No EVM gas estimation (`EstimateGas`).
+- No fee bump/speed-up/cancel.
+- No Bitcoin dynamic fee estimation and RBF policy.
+- No Solana priority fee/compute budget/rent dynamic handling.
 
 Risk:
-- Sabit gas limit veya static fee yogun aglarda basarisiz ya da asiri pahali olabilir.
-- Legacy EVM tx mode bazi chain kosullarinda optimal degil.
-- Token transferlerde gas limit 65000 her token icin yeterli olmayabilir.
+- A fixed gas limit or static fee can fail or become excessively expensive on congested networks.
+- Legacy EVM tx mode is not optimal under some chain conditions.
+- The 65000 gas limit may not be sufficient for every token transfer.
 
-Oneri:
-- EVM icin EIP-1559 destekli gas oracle ve `EstimateGas` ekleyin.
-- Bitcoin icin mempool fee estimator ve RBF stratejisi ekleyin.
-- Solana icin priority fee, compute budget ve ATA/rent maliyetini dinamik hesaplayin.
+Recommendations:
+- Add an EIP-1559-capable gas oracle and `EstimateGas` for EVM.
+- Add a mempool fee estimator and RBF strategy for Bitcoin.
+- Compute priority fee, compute budget and ATA/rent cost dynamically for Solana.
 
 ## 10. Nonce
 
-Mevcut implementasyon:
-- EVM nonce reservation process-local `chainresource.Manager` icindeki map'lerle yapilir. Base nonce `PendingNonceAt` ile alinir.
-- Nonce broadcast hatasinda da consumed olarak isaretlenir.
-- Bitcoin UTXO reservation process-local map ile yapilir; broadcast hatasinda fallback tx id ile consumed isaretlenir.
-- TRON ve Solana sequence lease process-local tek aktif sequence olarak modellenir.
+Current implementation:
+- EVM nonce reservation is done with maps inside the process-local `chainresource.Manager`. The base nonce is taken with `PendingNonceAt`.
+- A nonce is marked consumed even when the broadcast fails.
+- Bitcoin UTXO reservation is done with a process-local map; on broadcast failure it is marked consumed with a fallback tx id.
+- TRON and Solana sequence leases are modeled as a single active sequence, process-local.
 
-Dosya:
+Files:
 - `services/chainresource/manager.go`
 - `blockchain/chains/chain_resource_policy.go`
 - `blockchain/chains/evm_transfer.go`
@@ -433,7 +439,7 @@ Dosya:
 - `blockchain/chains/solana.go`
 - `blockchain/chains/solana_transfer.go`
 
-Fonksiyon:
+Functions:
 - `chainresource.Manager.ReserveNonce`
 - `NonceReservation.Release`
 - `NonceReservation.Consume`
@@ -450,32 +456,32 @@ Fonksiyon:
 - `TronChain.sendTRC20`
 - `SolanaChain.sendLamportsWithClient`
 
-Eksik:
-- Durable nonce/UTXO/sequence lock yok.
-- Multi-instance coordination yok.
-- Txpool/on-chain reconciliation ile nonce gap kapatma yok.
-- EVM replacement transaction lifecycle yok.
+Gaps:
+- No durable nonce/UTXO/sequence lock.
+- No multi-instance coordination.
+- No nonce gap closing through txpool/on-chain reconciliation.
+- No EVM replacement transaction lifecycle.
 
 Risk:
-- Birden fazla app instance calisirsa ayni nonce veya UTXO paralel kullanilabilir.
-- Process restart durumunda reservation state kaybolur; broadcast sonucu belirsiz tx'ler icin tekrar deneme karmasik hale gelir.
-- Broadcast hatasinda nonce/UTXO/sequence consumed isaretlenmesi process icinde duplicate'i engeller, fakat tx hic yayilmadiysa nonce gap veya locked UTXO algisi olusabilir.
+- If more than one app instance runs, the same nonce or UTXO can be used in parallel.
+- Reservation state is lost on process restart; retrying txs whose broadcast outcome is uncertain becomes complicated.
+- Marking a nonce/UTXO/sequence consumed on a broadcast error prevents duplicates inside the process, but if the tx was never broadcast at all, a nonce gap or a locked-UTXO perception can occur.
 
-Oneri:
-- Nonce/UTXO/sequence reservation'i DB tabanli lease ve state machine ile kalici hale getirin.
-- Broadcast belirsizligi icin chain lookup + retry/replacement workflow ekleyin.
-- Multi-instance calisma hedefleniyorsa advisory lock veya row-level lock kullanin.
+Recommendations:
+- Make nonce/UTXO/sequence reservation durable with DB-based leases and a state machine.
+- Add a chain lookup + retry/replacement workflow for broadcast uncertainty.
+- If multi-instance operation is targeted, use an advisory lock or row-level lock.
 
 ## 11. Recovery
 
-Mevcut implementasyon:
-- Manual tx rescan servisi EVM, Bitcoin, Solana, TRON/TRONTestnet icin transaction hash ile eventleri tekrar okuyup chain fact kaydedebilir ve deposit processing calistirabilir.
-- Startup backfill mevcut wallet row'lari icin eksik chain adreslerini turetir ve lookup tablosunu doldurur.
-- Sweep worker eksik finalized sweep job'lari tekrar enqueue eder.
-- Stale processing sweep job broadcast belirsizligi olarak dead-letter/reconciliation'a alinir.
-- Ledger invariant reconciliation ve reserve balance reconciliation worker'lari calisir.
+Current implementation:
+- The manual tx rescan service can re-read events by transaction hash for EVM, Bitcoin, Solana, TRON/TRONTestnet, record chain facts and run deposit processing.
+- Startup backfill derives missing chain addresses for existing wallet rows and fills the lookup table.
+- The sweep worker re-enqueues missing finalized sweep jobs.
+- A stale processing sweep job is taken to dead-letter/reconciliation as broadcast uncertainty.
+- The ledger invariant reconciliation and reserve balance reconciliation workers run.
 
-Dosya:
+Files:
 - `services/txrescan/service.go`
 - `api/handlers/txrescan.go`
 - `main.go`
@@ -483,7 +489,7 @@ Dosya:
 - `services/reconciliation`
 - `repositories/wallet_repo.go`
 
-Fonksiyon:
+Functions:
 - `txrescan.Service.Rescan`
 - `txrescan.Service.RescanForMerchant`
 - `txrescan.Service.recordRescanFact`
@@ -496,31 +502,31 @@ Fonksiyon:
 - `runLedgerInvariantReconciliation`
 - `runReserveBalanceReconciliation`
 
-Eksik:
-- Otomatik gap-limit recovery yok.
-- Otomatik historical rescan/backfill worker yok; listener current state'ten ileri akar.
-- Reorg sonrasi otomatik rollback/replay yok.
-- Mnemonic restore ile DB address reconstruction disinda chain discovery yok.
+Gaps:
+- No automatic gap-limit recovery.
+- No automatic historical rescan/backfill worker; the listener flows forward from the current state.
+- No automatic rollback/replay after a reorg.
+- No chain discovery outside DB address reconstruction from a mnemonic restore.
 
 Risk:
-- Kayip veya atlanmis blok/event operator manual rescan yapmadan yakalanmayabilir.
-- Seed/DB restore senaryolarinda sadece DB'deki wallet row'lari geri doldurulur.
-- Broadcast belirsizligi ve reorg cozumleri reconciliation uzerinden manuel inceleme gerektirebilir.
+- A lost or skipped block/event may not be caught without an operator running a manual rescan.
+- In seed/DB restore scenarios only the wallet rows in the DB are backfilled.
+- Broadcast uncertainty and reorg resolutions may require manual inspection through reconciliation.
 
-Oneri:
-- Recovery playbook ve operator tooling'i belirginlestirin.
-- ChainState replay window ve manual range rescan endpoint'i ekleyin.
-- Seed restore icin gap-limit scanner veya explicit "DB authoritative" recovery modeli tasarlayin.
+Recommendations:
+- Make the recovery playbook and operator tooling explicit.
+- Add a ChainState replay window and a manual range rescan endpoint.
+- Design a gap-limit scanner or an explicit "DB authoritative" recovery model for seed restore.
 
 ## 12. Blockchain Abstraction
 
-Mevcut implementasyon:
-- `blockchain.Chain` interface wallet derivation, transfer, sweep, prefund, address validation, worker lifecycle ve batch balance fonksiyonlarini tek interface'te topluyor.
-- `BaseChain` ortak RPC/env/ranker, worker lifecycle ve derivation helper'lari sagliyor; chain action method'lari default `not implemented`.
-- `ChainFactory` chain name -> implementation map'i ve alias destegi sagliyor.
-- EVM-compatible chain'ler ortak helper'lar uzerinden transfer/sweep yapar.
+Current implementation:
+- The `blockchain.Chain` interface gathers wallet derivation, transfer, sweep, prefund, address validation, worker lifecycle and batch balance functions in one interface.
+- `BaseChain` provides the shared RPC/env/ranker, worker lifecycle and derivation helpers; chain action methods default to `not implemented`.
+- `ChainFactory` provides a chain name -> implementation map and alias support.
+- EVM-compatible chains perform transfer/sweep through shared helpers.
 
-Dosya:
+Files:
 - `blockchain/basechain.go`
 - `blockchain/factory.go`
 - `application/configuration/chains.go`
@@ -529,7 +535,7 @@ Dosya:
 - `services/txrescan/service.go`
 - `repositories/wallet_repo.go`
 
-Fonksiyon:
+Functions:
 - `Chain` interface
 - `BaseChain.RPCs`
 - `BaseChain.CreateHDWallet`
@@ -541,29 +547,29 @@ Fonksiyon:
 - `startChainInfrastructure`
 - `txrescan.Service.rescan`
 
-Eksik:
-- Wallet derivation, transfer, watcher ve balance capability'leri ayri interface'lere bolunmemis.
-- Chain capability registry yok.
-- Chain-specific davranislar abstraction disina siziyor: `main.go` TRON native sweep ayrimi, `txrescan` chain switch'i, wallet repo chain kolon mapping'i.
+Gaps:
+- Wallet derivation, transfer, watcher and balance capabilities are not split into separate interfaces.
+- No chain capability registry.
+- Chain-specific behavior leaks outside the abstraction: the TRON native sweep distinction in `main.go`, the chain switch in `txrescan`, the chain column mapping in the wallet repo.
 
 Risk:
-- Yeni chain eklemek yuksek blast radius olusturur.
-- Interface cok genis oldugu icin chain'in desteklemedigi fonksiyonlar runtime error veya no-op seklinde kalabilir.
-- Kodda chain-family bilgisi daginik oldugu icin policy tutarsizligi olusabilir.
+- Adding a new chain creates a high blast radius.
+- Because the interface is very wide, functions a chain does not support can remain as runtime errors or no-ops.
+- Chain-family knowledge is scattered in the code, which can cause policy inconsistency.
 
-Oneri:
-- `WalletDeriver`, `Broadcaster`, `Watcher`, `FeeManager`, `BalanceProvider`, `SweepProvider` gibi capability interface'leri ayirin.
-- Chain config/capability registry'yi tek kaynak haline getirin.
-- Unsupported operation'lari compile-time veya startup validation ile yakalayin.
+Recommendations:
+- Split capability interfaces such as `WalletDeriver`, `Broadcaster`, `Watcher`, `FeeManager`, `BalanceProvider`, `SweepProvider`.
+- Make the chain config/capability registry the single source of truth.
+- Catch unsupported operations with compile-time or startup validation.
 
 ## 13. Node Abstraction
 
-Mevcut implementasyon:
-- `BaseChain.RPCs` env ve default endpoint'leri birlestirir; global `RPCURLRanker` varsa siralamayi provider health sonucuna gore degistirir.
-- Provider health servisi EVM, Bitcoin, Solana ve TRON endpoint'lerini probe eder; stale/inconsistent/unhealthy durumlarini snapshot olarak saklar ve URL siralamasinda kullanir.
-- Listener ve transfer kodlari kendi HTTP/gRPC/ethclient cagrilarini dogrudan yapar.
+Current implementation:
+- `BaseChain.RPCs` merges env and default endpoints; if a global `RPCURLRanker` exists it changes the ordering according to provider health results.
+- The provider health service probes EVM, Bitcoin, Solana and TRON endpoints, stores stale/inconsistent/unhealthy states as snapshots and uses them in URL ranking.
+- Listener and transfer code make their own HTTP/gRPC/ethclient calls directly.
 
-Dosya:
+Files:
 - `blockchain/basechain.go`
 - `services/providerhealth/service.go`
 - `repositories/provider_health_repo.go`
@@ -575,7 +581,7 @@ Dosya:
 - `blockchain/chains/evm_transfer.go`
 - `blockchain/chains/tron_transfer.go`
 
-Fonksiyon:
+Functions:
 - `BaseChain.RPCs`
 - `SetRPCURLRanker`
 - `providerhealth.Service.RunOnce`
@@ -587,32 +593,32 @@ Fonksiyon:
 - `runProviderHealthCheck`
 - Listener `rpcCall` / `get` / gRPC client functions
 
-Eksik:
-- Ortak node client interface'i yok.
-- Method capability modeli yok; ornegin EVM `trace_block` destegi provider health seviyesinde bilinmiyor.
-- Quorum read veya cross-provider block hash verification listener akisi icinde yok.
-- WebSocket-based subscription startup path'inde genel olarak kullanilmiyor.
+Gaps:
+- No shared node client interface.
+- No method capability model; for example, EVM `trace_block` support is not known at the provider health level.
+- No quorum read or cross-provider block hash verification inside the listener flow.
+- WebSocket-based subscription is generally not used in the startup path.
 
 Risk:
-- Provider health URL siralasa da her chain method'unun gercek capability'si ayrica garanti edilmiyor.
-- Bir provider method seti eksikse event tipi kaybi olabilir.
-- Dogrudan HTTP/gRPC kullanimi retry, timeout, rate-limit ve observability davranisini dagitir.
+- Even if provider health ranks URLs, the real capability of each chain method is not separately guaranteed.
+- If a provider is missing a method set, event-type loss is possible.
+- Direct HTTP/gRPC usage scatters retry, timeout, rate-limit and observability behavior.
 
-Oneri:
-- Chain-family bazli node client abstraction olusturun.
-- Provider capability probe'lari ekleyin: EVM receipts batch, trace, archive depth, Solana finalized blocks, TRON txinfo.
-- Listener'lar icin provider quorum veya en azindan head hash consistency guard'i ekleyin.
+Recommendations:
+- Create a chain-family-based node client abstraction.
+- Add provider capability probes: EVM receipts batch, trace, archive depth, Solana finalized blocks, TRON txinfo.
+- Add a provider quorum, or at least a head hash consistency guard, for listeners.
 
 ## 14. Multi-chain Design
 
-Mevcut implementasyon:
-- Chain ID ve adlari `constants/chains.go` icinde sabit.
-- Chain registration `application/configuration/chains.go` icinde yapiliyor: Solana, Ethereum, TRON, TRON testnet, Bitcoin, Avalanche, BNB Chain, Chiliz, Chiliz Spicy, Base, Arbitrum, Unichain.
-- EVM-compatible chain'ler ortak `EVMCompatibleChain` ve `evm_transfer.go` helper'larini paylasiyor.
-- Wallet modeli chain basina kolon tutuyor; lookup tablosu chain-id/adres bazli ek index sagliyor.
-- Asset registry chain ve token bazli kullaniliyor.
+Current implementation:
+- Chain IDs and names are constants in `constants/chains.go`.
+- Chain registration happens in `application/configuration/chains.go`: Solana, Ethereum, TRON, TRON testnet, Bitcoin, Avalanche, BNB Chain, Chiliz, Chiliz Spicy, Base, Arbitrum, Unichain.
+- EVM-compatible chains share the common `EVMCompatibleChain` and `evm_transfer.go` helpers.
+- The wallet model keeps a column per chain; the lookup table provides an additional chain-id/address-based index.
+- The asset registry is used on a chain and token basis.
 
-Dosya:
+Files:
 - `constants/chains.go`
 - `application/configuration/chains.go`
 - `models/wallet.go`
@@ -622,7 +628,7 @@ Dosya:
 - `blockchain/chains/evm_compatible.go`
 - `asset`
 
-Fonksiyon:
+Functions:
 - `AllChainIDs`
 - `IsSupportedChainID`
 - `ChainName`
@@ -634,18 +640,18 @@ Fonksiyon:
 - `WalletAddressForChainID`
 - `AddressIndex.Load`
 
-Eksik:
-- Chain ekleme icin declarative config yok; code-level registration ve schema mapping gerekiyor.
-- Wallet address modeli normalized `wallet_addresses` tablosunu ana kaynak olarak kullanmiyor; chain kolonlari hala merkezi.
-- TRON mainnet/testnet adres ayrimi wallet schema'sinda yok.
-- Chain-family policy'leri tek yerde degil.
+Gaps:
+- No declarative config for adding a chain; code-level registration and schema mapping are required.
+- The wallet address model does not use a normalized `wallet_addresses` table as the primary source; chain columns are still central.
+- TRON mainnet/testnet address separation does not exist in the wallet schema.
+- Chain-family policies are not in one place.
 
 Risk:
-- Yeni chain eklemek migration, model, repo, lookup, listener, asset registry, route/admin UI gibi birden fazla noktada degisiklik gerektirir.
-- Chain kolonlari arttikca wallet modeli buyur ve test yuku artar.
-- Testnet/mainnet ayrimi kolon bazinda yeterince guclu degil.
+- Adding a new chain requires changes in multiple places such as migration, model, repo, lookup, listener, asset registry and route/admin UI.
+- As chain columns grow the wallet model grows and the test load increases.
+- Testnet/mainnet separation is not strong enough at column level.
 
-Oneri:
-- Normalized `wallet_addresses(wallet_id, chain_id, address, derivation_path, derivation_version)` modelini ana kaynak haline getirin.
-- Chain registration, finality, derivation, fee, listener ve capability ayarlarini tek chain registry altinda toplayin.
-- Testnet/mainnet izolasyonunu chain-id bazli address storage ve policy ile zorunlu hale getirin.
+Recommendations:
+- Make the normalized `wallet_addresses(wallet_id, chain_id, address, derivation_path, derivation_version)` model the primary source.
+- Gather chain registration, finality, derivation, fee, listener and capability settings under a single chain registry.
+- Make testnet/mainnet isolation mandatory with chain-id-based address storage and policy.

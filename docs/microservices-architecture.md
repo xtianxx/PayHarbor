@@ -1,49 +1,56 @@
 # Gateway Microservice Architecture
 
-Bu doküman, mevcut Gateway kod tabanının borsa entegrasyonu için güvenli şekilde mikroservis mimarisine taşınacak hedef yapısını tanımlar. Amaç, her kullanıcı için wallet üretmek, depositleri izlemek, withdrawal yapmak, ledger bakiyesini doğru tutmak ve borsaya güvenilir API/event kontratları sağlamaktır.
+> **Status: proposed architecture.** This document describes a target structure for moving the
+> current Gateway codebase to a microservice architecture for exchange integration. It is **not**
+> a description of deployed microservices: the repository is a modular monolith, and the phase
+> list below is a proposal, not a record of completed work. See the root README for the current
+> engineering status and limitations.
 
-## Temel Hedef
+The goal is to generate a wallet for every user, monitor deposits, execute withdrawals, keep the
+ledger balance correct and provide reliable API/event contracts to the exchange.
 
-Gateway, borsa çekirdeği için custody/payment altyapısı olarak çalışır:
+## Core Objective
 
-- Her borsa kullanıcısı için zincir/asset bazlı deposit adresi üretir veya mevcut adresi döner.
-- On-chain depositleri izler, finality sonrası ledger bakiyesine işler.
-- Withdrawal isteklerini idempotent şekilde alır, risk/approval/hold akışından geçirir, imzalar ve broadcast eder.
-- Merchant/payment session kullanımını destekler, ancak ledger ve wallet sahipliği tek merkezde kalır.
-- Borsaya API ve event/webhook ile durum bildirir.
+Gateway acts as the custody/payment infrastructure for an exchange core:
 
-## Servis Sınırları
+- Generates a chain/asset-specific deposit address for every exchange user, or returns the existing address.
+- Monitors on-chain deposits and credits the ledger balance after finality.
+- Accepts withdrawal requests idempotently, runs them through risk/approval/hold, signs and broadcasts them.
+- Supports merchant/payment-session usage while ledger and wallet ownership stay centralized.
+- Reports status to the exchange through API and event/webhook contracts.
 
-| Servis | Sorumluluk | Sahip Olduğu Veri |
+## Service Boundaries
+
+| Service | Responsibility | Data Owned |
 |---|---|---|
 | API Gateway / BFF | Public REST API, auth, API key validation, request schema, idempotency envelope, rate limit | API request log, idempotency keys |
-| Identity & Admin | Admin kullanıcıları, TOTP, operator rolleri, merchant/exchange tenant erişimi | admins, roles, sessions, audit logs |
-| Merchant / Tenant Service | Merchant/domain/API key/webhook ayarları | merchants, domains, api_keys |
-| Wallet Service | Kullanıcı ve ödeme oturumu wallet üretimi, address ownership, HD index yönetimi | wallets, hd_accounts, address_indexes |
-| Signer Service | KMS/HSM/Vault üzerinden transaction imzalama; mnemonic veya private key app DB'de durmaz | key references, signing policies |
-| Chain Indexer Service | Zincir başına blok tarama, tx/log tespiti, chain state, reorg detection | chain_states, raw_chain_events |
-| Deposit Service | Indexer eventlerini wallet ile eşleştirme, confirmation gate, payment/deposit state | transactions, deposit_attempts |
-| Ledger Service | Double-entry ledger, available/pending/hold bakiyeleri, balance API | ledger_entries, ledger_accounts |
-| Payment Session Service | Invoice/checkout/payment link oturumları, quote snapshot, payment status | payment_sessions, price_quotes |
+| Identity & Admin | Admin users, TOTP, operator roles, merchant/exchange tenant access | admins, roles, sessions, audit logs |
+| Merchant / Tenant Service | Merchant/domain/API key/webhook settings | merchants, domains, api_keys |
+| Wallet Service | User and payment-session wallet generation, address ownership, HD index management | wallets, hd_accounts, address_indexes |
+| Signer Service | Transaction signing through KMS/HSM/Vault; mnemonic or private key never lives in the app DB | key references, signing policies |
+| Chain Indexer Service | Per-chain block scanning, tx/log detection, chain state, reorg detection | chain_states, raw_chain_events |
+| Deposit Service | Matching indexer events to wallets, confirmation gate, payment/deposit state | transactions, deposit_attempts |
+| Ledger Service | Double-entry ledger, available/pending/hold balances, balance API | ledger_entries, ledger_accounts |
+| Payment Session Service | Invoice/checkout/payment-link sessions, quote snapshot, payment status | payment_sessions, price_quotes |
 | Withdrawal Service | Withdrawal request, hold, approval, nonce, broadcast, finalization | withdrawal_requests, withdrawal_txs |
 | Webhook Service | Webhook delivery, retry, replay, signing, per-attempt log | webhook_deliveries |
 | Pricing Service | Fiat/crypto quote, staleness guard, quote snapshot | price_quotes, price_sources |
-| Reconciliation Service | Rescan, missed tx detection, ledger-chain reconciliation reports | reconciliation_jobs, mismatch_reports |
+| Reconciliation Service | Rescan, missed-tx detection, ledger-chain reconciliation reports | reconciliation_jobs, mismatch_reports |
 
-## Kritik Veri Sahipliği Kuralları
+## Critical Data Ownership Rules
 
-- Wallet adreslerini sadece Wallet Service üretir ve sahiplenir.
-- Ledger bakiyesini sadece Ledger Service değiştirir.
-- Chain Indexer business status yazmaz; sadece ham zincir eventleri üretir.
-- Deposit Service, confirmed deposit eventinden sonra Ledger Service'e idempotent credit komutu gönderir.
-- Withdrawal Service, Ledger Service'ten hold almadan imza/broadcast yapamaz.
-- Signer Service private key veya mnemonic'i HTTP response, log veya app DB'ye vermez.
-- Webhook Service, gönderimden hemen önce webhook URL'ini tekrar doğrular.
-- Payment Session Service fiyatı session anında snapshot olarak kaydeder; sonradan oracle fiyatıyla geçmiş session yeniden hesaplanmaz.
+- Only the Wallet Service generates and owns wallet addresses.
+- Only the Ledger Service changes ledger balances.
+- The Chain Indexer never writes business status; it only produces raw chain events.
+- The Deposit Service sends an idempotent credit command to the Ledger Service after a confirmed deposit event.
+- The Withdrawal Service cannot sign or broadcast without a hold from the Ledger Service.
+- The Signer Service never exposes private keys or mnemonics through HTTP responses, logs or the app DB.
+- The Webhook Service revalidates the webhook URL immediately before delivery.
+- The Payment Session Service snapshots the price at session time; past sessions are never recalculated from a later oracle price.
 
-## Event Kontratları
+## Event Contracts
 
-Fiziksel ayrıştırmada Kafka, NATS JetStream, RabbitMQ veya Postgres outbox kullanılabilir. İlk aşamada Postgres outbox yeterlidir.
+Kafka, NATS JetStream, RabbitMQ or a Postgres outbox can be used for physical separation. A Postgres outbox is sufficient for the first phase.
 
 | Event | Producer | Consumer | Idempotency Key |
 |---|---|---|---|
@@ -60,38 +67,38 @@ Fiziksel ayrıştırmada Kafka, NATS JetStream, RabbitMQ veya Postgres outbox ku
 | `withdrawal.finalized.v1` | Withdrawal Service | Ledger, Webhook, Exchange | `withdrawal_id:finalized` |
 | `webhook.delivery.failed.v1` | Webhook Service | Ops/Replay | `delivery_id:attempt` |
 
-## Borsa Entegrasyon API'leri
+## Exchange Integration APIs
 
-Gateway borsaya tek bir stable API sunmalı; iç servislerin sayısı borsayı etkilememeli.
+Gateway should expose a single stable API to the exchange; the number of internal services must not affect the exchange.
 
 ### Wallet
 
 - `POST /api/v1/users/{user_id}/wallets`
-  - Kullanıcı için asset/chain bazlı deposit wallet üretir veya mevcut wallet'ı döner.
-  - Idempotency key zorunlu olmalı.
+  - Generates an asset/chain-specific deposit wallet for the user or returns the existing wallet.
+  - An idempotency key is mandatory.
 - `GET /api/v1/users/{user_id}/wallets`
-  - Kullanıcının aktif deposit adreslerini listeler.
+  - Lists the user's active deposit addresses.
 
 ### Deposit
 
 - `GET /api/v1/users/{user_id}/deposits`
-  - Pending, confirmed, finalized deposit geçmişini döner.
+  - Returns pending, confirmed and finalized deposit history.
 - `GET /api/v1/deposits/{deposit_id}`
-  - Tek deposit durumunu döner.
+  - Returns the status of a single deposit.
 
 ### Balance
 
 - `GET /api/v1/users/{user_id}/balances`
-  - Sadece Ledger Service kaynaklı available/pending/hold bakiyeleri döner.
-  - Zincir tarama tablosu veya raw transaction tablosundan balance hesaplanmaz.
+  - Returns only available/pending/hold balances sourced from the Ledger Service.
+  - Balances are never computed from the chain-scan table or the raw transaction table.
 
 ### Withdrawal
 
 - `POST /api/v1/withdrawals`
-  - Idempotent withdrawal talebi açar.
-  - Ledger hold başarılı değilse request kabul edilmez.
+  - Opens an idempotent withdrawal request.
+  - The request is rejected if the ledger hold fails.
 - `GET /api/v1/withdrawals/{withdrawal_id}`
-  - Request, approval, broadcast ve finality durumlarını döner.
+  - Returns request, approval, broadcast and finality status.
 
 ### Webhook
 
@@ -102,55 +109,55 @@ Gateway borsaya tek bir stable API sunmalı; iç servislerin sayısı borsayı e
 - `withdrawal.finalized`
 - `withdrawal.failed`
 
-Her webhook şu headerları taşımalı:
+Every webhook must carry these headers:
 
 - `X-Gateway-Event`
 - `X-Gateway-Event-Id`
 - `X-Gateway-Timestamp`
 - `X-Gateway-Signature`
 
-## Deposit Akışı
+## Deposit Flow
 
-1. Exchange, kullanıcı için wallet ister.
-2. Wallet Service deterministic HD index ile adres üretir ve `wallet.created.v1` eventini yayınlar.
-3. Chain Indexer zinciri tarar, wallet adresine gelen tx/log için `chain.tx.detected.v1` üretir.
-4. Deposit Service tx'yi wallet ile eşleştirir, duplicate kontrolü yapar ve depositi `detected` yazar.
-5. Gerekli confirmation sayısı tamamlanınca `deposit.finalized.v1` üretilir.
-6. Ledger Service pending/available entrylerini double-entry olarak işler.
-7. Webhook Service borsaya deposit finalized bildirir.
+1. The exchange requests a wallet for the user.
+2. The Wallet Service derives the address from the deterministic HD index and publishes `wallet.created.v1`.
+3. The Chain Indexer scans the chain and emits `chain.tx.detected.v1` for a tx/log paying the wallet address.
+4. The Deposit Service matches the tx to the wallet, performs the duplicate check and records the deposit as `detected`.
+5. Once the required confirmations are reached, `deposit.finalized.v1` is emitted.
+6. The Ledger Service posts the pending/available entries as double-entry.
+7. The Webhook Service notifies the exchange that the deposit is finalized.
 
-Deposit invariantları:
+Deposit invariants:
 
-- Aynı `chain_id + tx_hash + log_index` ikinci kez ledger credit oluşturamaz.
-- Finality tamamlanmadan available balance artmaz.
-- Reorg tespit edilirse ilgili deposit `reorged` olur ve ledger reversal entry yazılır.
-- Payment link session için wallet scope session bazında tekil olmalıdır; aynı statik adres farklı açık invoice'ları kapatmamalıdır.
+- The same `chain_id + tx_hash + log_index` can never create a second ledger credit.
+- Available balance does not increase before finality is complete.
+- If a reorg is detected, the deposit becomes `reorged` and a ledger reversal entry is written.
+- For payment-link sessions the wallet scope must be unique per session; the same static address must not close different open invoices.
 
-## Withdrawal Akışı
+## Withdrawal Flow
 
-1. Exchange `POST /withdrawals` ile talep açar.
-2. Withdrawal Service idempotency key ile duplicate request'i engeller.
-3. Ledger Service available bakiyeden hold alır.
-4. Risk/admin policy uygunsa withdrawal `approved` olur.
-5. Signer Service transaction imzalar; private key dışarı çıkmaz.
-6. Withdrawal Service nonce ve broadcast işlemini yönetir.
-7. Chain Indexer broadcast tx'yi izler.
-8. Finality tamamlanınca Ledger Service hold'u kapatır ve withdrawal finalized entry yazar.
-9. Webhook Service sonucu borsaya bildirir.
+1. The exchange opens a request with `POST /withdrawals`.
+2. The Withdrawal Service prevents duplicate requests by idempotency key.
+3. The Ledger Service takes a hold from the available balance.
+4. The withdrawal becomes `approved` if risk/admin policy allows.
+5. The Signer Service signs the transaction; the private key never leaves it.
+6. The Withdrawal Service manages nonce and broadcast.
+7. The Chain Indexer monitors the broadcast tx.
+8. On finality, the Ledger Service closes the hold and writes the withdrawal finalized entry.
+9. The Webhook Service reports the result to the exchange.
 
-Withdrawal invariantları:
+Withdrawal invariants:
 
-- Hold yoksa imza yok.
-- Available balance negatif olamaz.
-- Aynı idempotency key ikinci withdrawal oluşturamaz.
-- Broadcast edilmiş tx kaybolursa reconciliation job tekrar kontrol eder; kör retry yeni tx üretmez.
-- Nonce yönetimi chain/account bazında tek sahipli olmalıdır.
+- No hold, no signature.
+- Available balance can never be negative.
+- The same idempotency key cannot create a second withdrawal.
+- If a broadcast tx is lost, a reconciliation job re-checks it; a blind retry does not create a new tx.
+- Nonce management must have a single owner per chain/account.
 
-## Veritabanı Ayrıştırma Stratejisi
+## Database Separation Strategy
 
-İlk adım fiziksel DB ayırmak değil, tablo sahipliğini netleştirmektir.
+The first step is not physical database separation but clarifying table ownership.
 
-| Şema | Tablolar |
+| Schema | Tables |
 |---|---|
 | `identity` | admins, roles, admin_sessions, activity_logs |
 | `tenant` | merchants, domains, api_keys |
@@ -162,65 +169,65 @@ Withdrawal invariantları:
 | `withdrawal` | withdrawal_requests, withdrawal_transactions |
 | `webhook` | webhook_deliveries, webhook_subscriptions |
 
-Kural: Bir servis başka servisin tablosuna doğrudan yazmaz. Monolit içinde bile bu kural repository boundary ile uygulanmalıdır.
+Rule: a service never writes directly to another service's tables. Even inside the monolith this rule must be enforced through the repository boundary.
 
-## Geçiş Planı
+## Migration Plan
 
-### Faz 0: Monolit Sertleştirme
+### Phase 0: Monolith Hardening
 
-- Env fallback admin login kapatılır.
-- Pasif merchant login/API erişimi engellenir.
-- Payment link wallet reuse kaldırılır.
-- Balance endpoint sadece ledger available hesaplarını döner.
-- Webhook URL delivery anında yeniden doğrulanır.
-- Portal JWT, rate limit, confirmation gate, quote snapshot ve reorg reversal tamamlanır.
+- Environment-fallback admin login is disabled.
+- Inactive merchant login/API access is blocked.
+- Payment-link wallet reuse is removed.
+- The balance endpoint returns only ledger available calculations.
+- The webhook URL is revalidated at delivery time.
+- Portal JWT, rate limit, confirmation gate, quote snapshot and reorg reversal are completed.
 
-### Faz 1: Modüler Monolit
+### Phase 1: Modular Monolith
 
-- `internal/wallet`, `internal/deposit`, `internal/ledger`, `internal/withdrawal`, `internal/webhook` paket sınırları oluşturulur.
-- Repository erişimi servis sahipliğine göre ayrılır.
-- Postgres outbox tablosu eklenir.
-- Tüm para hareketleri outbox + idempotency ile çalışır.
+- `internal/wallet`, `internal/deposit`, `internal/ledger`, `internal/withdrawal`, `internal/webhook` package boundaries are created.
+- Repository access is separated by service ownership.
+- A Postgres outbox table is added.
+- All money movement runs through outbox + idempotency.
 
-### Faz 2: İlk Fiziksel Servisler
+### Phase 2: First Physical Services
 
-Önce stateless ve düşük riskli parçalar ayrılır:
+Stateless and low-risk pieces are separated first:
 
 1. Webhook Worker
 2. Chain Indexer Worker
 3. Pricing Worker
 4. Reconciliation Worker
 
-Bu servisler ayrıldıktan sonra ledger ve wallet sahipliği hâlâ monolitte kalabilir.
+After these services are separated, ledger and wallet ownership may still remain in the monolith.
 
-### Faz 3: Para Sahipliği Ayrımı
+### Phase 3: Money Ownership Separation
 
-1. Ledger Service ayrılır.
-2. Wallet Service ayrılır.
-3. Signer Service KMS/HSM arkasına alınır.
-4. Withdrawal Service signer ve ledger ile kontrat üzerinden çalışır.
+1. The Ledger Service is separated.
+2. The Wallet Service is separated.
+3. The Signer Service is moved behind KMS/HSM.
+4. The Withdrawal Service works with signer and ledger through contracts.
 
-Bu fazdan önce integration test ve staging replay yapılmadan production geçiş yapılmamalıdır.
+No production cutover may happen before integration tests and staging replay are completed for this phase.
 
-### Faz 4: Borsa Ölçeği
+### Phase 4: Exchange Scale
 
 - Per-chain indexer autoscaling.
-- Redis/NATS/Kafka tabanlı distributed rate limit ve queue.
-- Multi-region read replica.
+- Distributed rate limit and queue based on Redis/NATS/Kafka.
+- Multi-region read replicas.
 - Ledger reconciliation dashboard.
-- On-call alerting: indexer lag, webhook failure rate, withdrawal stuck, ledger mismatch.
+- On-call alerting: indexer lag, webhook failure rate, stuck withdrawals, ledger mismatch.
 
-## Production Öncesi Bloklayıcılar
+## Pre-Production Blockers
 
-- Admin/merchant formlarına portal mutasyon JWT eklenmeli.
-- Chain confirmation gate ödeme status akışına bağlanmalı.
-- Reorg reversal ledger entryleri yazılmalı.
-- Withdrawal nonce ve hold akışı integration test ile kapatılmalı.
-- Mnemonic/private key env yerine KMS/HSM/Vault referansı ile yönetilmeli.
-- API key rate limit per-domain/per-key olmalı.
-- Price quote session anında saklanmalı ve TTL ile korunmalı.
-- Ledger DB constraintleri negative available balance ve duplicate posting'i engellemeli.
+- Portal mutation JWT must be added to admin/merchant forms.
+- The chain confirmation gate must be connected to the payment status flow.
+- Reorg reversal ledger entries must be written.
+- The withdrawal nonce and hold flow must be covered by integration tests.
+- Mnemonic/private key must be managed by KMS/HSM/Vault references instead of env.
+- API key rate limits must be per-domain/per-key.
+- Price quotes must be stored at session time and protected with a TTL.
+- Ledger DB constraints must prevent negative available balance and duplicate posting.
 
-## Kısa Karar
+## Short Decision
 
-Bu codebase doğrudan "servislere böl" şeklinde parçalanmamalı. Önce para hareketi invariantları monolit içinde netleşmeli, sonra outbox/event kontratları eklenmeli, en son servisler fiziksel olarak ayrılmalıdır. Aksi halde mikroservis mimarisi hata sayısını azaltmaz; dağıtık para kaybı riskini artırır.
+This codebase should not be split directly into "services". First the money-movement invariants must be clarified inside the monolith, then outbox/event contracts must be added, and only then should services be separated physically. Otherwise a microservice architecture does not reduce the number of errors; it increases the risk of distributed money loss.

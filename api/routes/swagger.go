@@ -9,10 +9,10 @@ import (
 	fiber "github.com/gofiber/fiber/v3"
 )
 
-// GenerateFakeActionRoutesSwagger, action bazlı router'ı Swagger UI için sahte endpoint olarak ekler
+// GenerateFakeActionRoutesSwagger adds the action router as fake endpoints for the Swagger UI.
 func GenerateFakeActionRoutesSwagger(app *fiber.App, ar *router.ActionRouter) {
 	for _, cmd := range constants.AllCommands {
-		// Swagger için GET ve POST ekliyoruz
+		// Register both GET and POST for Swagger.
 		path := fmt.Sprintf("/%s", cmd)
 
 		app.Get(path, func(c fiber.Ctx) error {
