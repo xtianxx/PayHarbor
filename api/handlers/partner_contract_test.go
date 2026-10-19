@@ -61,7 +61,7 @@ func TestIntegrationGuideContractEvidenceCoversEpic1PartnerFlow(t *testing.T) {
 	guide := string(body)
 
 	requiredSnippets := []string{
-		"V1 request signing binds method, original path/query target, timestamp, and raw body.",
+		"V1 请求签名绑定方法、原始路径/查询目标、时间戳与原始请求体。",
 		"message = METHOD + \"\\n\" + path_and_query + \"\\n\" + timestamp + \"\\n\" + body",
 		"\"result\": \"ok\"",
 		"\"data\": {",
@@ -73,8 +73,8 @@ func TestIntegrationGuideContractEvidenceCoversEpic1PartnerFlow(t *testing.T) {
 		"\"terminal\": true",
 		"\"result\": \"error\"",
 		"\"message\": \"idempotency key was already used with a different request\"",
-		"## Contract Evidence - Epic 1",
-		"Known production limitations",
+		"## 契约证据 - Epic 1",
+		"已知生产限制",
 	}
 	for _, snippet := range requiredSnippets {
 		if !strings.Contains(guide, snippet) {

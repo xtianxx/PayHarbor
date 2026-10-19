@@ -15,6 +15,7 @@ This project is not just a hosted checkout page. It combines hosted checkout, st
 - [Baseline test harness](deploy/compose/baseline/README.md) — Prepare/Build/Test/Smoke phases on an internal-only compose network (`scripts/baseline/run-tests.sh`, `verify-test-json.py`).
 - [Money path observability runbook](docs/money-path-observability-runbook.md) and [Sweep operations runbook](docs/sweep-operations-runbook.md).
 - [Project notes](docs/portfolio.md) — architecture and verification notes (Chinese).
+- The guides listed above are written in Simplified Chinese; this README remains in English.
 - Testing quick reference: `go test ./...` for the Go suite, plus the baseline harness above for the containerised, exit-code-verified run; the read-only observer package regresses with `go test ./services/outboundobserver/`.
 
 ## What Does PayHarbor Do?

@@ -2,6 +2,7 @@ package docs
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -18,7 +19,7 @@ func TestIntegrationGuideMatchesEpic1PartnerContract(t *testing.T) {
 	requireContains(t, guide, "POST\\n/api/v1/payment/create")
 	requireNotContains(t, guide, "message = timestamp + body")
 
-	paymentSection := markdownSection(guide, "## Create Hosted Payment", "## Create Static Deposit Address")
+	paymentSection := requireAnchorSection(t, guide, "create-hosted-payment", "create-static-deposit-address")
 	requireContains(t, paymentSection, `"result": "ok"`)
 	requireContains(t, paymentSection, `"data": {`)
 	requireContains(t, paymentSection, `"track_id"`)
@@ -28,12 +29,12 @@ func TestIntegrationGuideMatchesEpic1PartnerContract(t *testing.T) {
 	requireContains(t, paymentSection, "409")
 	requireNotContains(t, paymentSection, `"success": true`)
 
-	staticSection := markdownSection(guide, "## Create Static Deposit Address", "## Create Wallet Provider Wallet")
-	for _, token := range []string{`"product_id"`, `"chain_id"`, `"token"`, `"created_at"`, "domain/product/user/asset"} {
+	staticSection := requireAnchorSection(t, guide, "create-static-deposit-address", "create-wallet-provider-wallet")
+	for _, token := range []string{`"product_id"`, `"chain_id"`, `"token"`, `"created_at"`, "域/产品/用户/资产"} {
 		requireContains(t, staticSection, token)
 	}
 
-	statusSection := markdownSection(guide, "## Query Payment", "## Create Payout Request")
+	statusSection := requireAnchorSection(t, guide, "query-payment", "create-payout-request")
 	for _, token := range []string{
 		"`active`",
 		"`pending`",
@@ -55,28 +56,28 @@ func TestIntegrationGuideMatchesEpic1PartnerContract(t *testing.T) {
 		"`partial_aggregating`",
 		"`missing_memo`",
 		"`wrong_memo`",
-		"policy-enabled aggregate matches",
+		"策略启用的聚合匹配",
 	} {
 		requireContains(t, statusSection, token)
 	}
 
-	errorSection := markdownSection(guide, "## Error Handling", "## Security Checklist")
+	errorSection := requireAnchorSection(t, guide, "error-handling", "security-checklist")
 	requireContains(t, errorSection, `"result": "error"`)
 	requireContains(t, errorSection, `"message"`)
-	requireContains(t, errorSection, "PayHarbor may replay a failed or dead-lettered webhook with the same event id/type/version")
+	requireContains(t, errorSection, "PayHarbor 可能以相同 event id/type/version 重放失败或已死信的 Webhook")
 	requireNotContains(t, errorSection, `"error":`)
 
-	webhookSection := markdownSection(guide, "## Webhooks", "### Transaction Webhook Payload")
+	webhookSection := requireAnchorSection(t, guide, "webhooks", "transaction-webhook-payload")
 	for _, token := range []string{
-		"Webhook delivery is at-least-once",
-		"operator replay can deliver the same event more than once",
+		"Webhook 投递是至少一次",
+		"操作员重放可能多次投递同一事件",
 		"X-Gateway-Event-Id",
 		"event_id",
 		"event_type",
 		"event_version",
 		"merchant_id",
 		"domain_id",
-		"not as a new business event",
+		"而不是新的业务事件",
 	} {
 		requireContains(t, webhookSection, token)
 	}
@@ -366,10 +367,10 @@ func TestEpic5OperationsDocsDocumentGORMMigrationsObservabilityAndLaunchGates(t 
 		"gateway_provider_health",
 		"gateway_wallet_address_lookup_rows",
 		"deploy/prometheus/gateway-alerts.yaml",
-		"Production logs are structured JSON",
+		"生产日志通过运维 logger 输出结构化 JSON",
 		"trace_id",
-		"Emergency Freeze",
-		"Backup And Restore Drill",
+		"紧急冻结",
+		"备份与恢复演练",
 	} {
 		requireContains(t, runbook, token)
 	}
@@ -491,6 +492,71 @@ func TestSwaggerContainsEpic1PartnerContract(t *testing.T) {
 	paymentStats := definitionProperties(t, defs, "types.V1PaymentStatisticsData")
 	if _, ok := paymentStats["statuses"]; !ok {
 		t.Fatal("types.V1PaymentStatisticsData missing statuses property")
+	}
+}
+
+// markdownAnchorSection extracts the region between two explicit HTML anchors of a
+// translated document. It fails closed: a missing start anchor, a missing end anchor,
+// an empty region or an empty tail after the start anchor is an error, so a negative
+// assertion can never pass because a lookup silently returned "" or the whole document.
+// An empty endID means "to the end of the document", which still requires body content.
+func markdownAnchorSection(doc, startID, endID string) (string, error) {
+	startMarker := `<a id="` + startID + `"></a>`
+	startIndex := strings.Index(doc, startMarker)
+	if startIndex < 0 {
+		return "", fmt.Errorf("start anchor %q not found", startID)
+	}
+	body := doc[startIndex+len(startMarker):]
+	if strings.TrimSpace(body) == "" {
+		return "", fmt.Errorf("section after anchor %q is empty", startID)
+	}
+	if endID == "" {
+		return body, nil
+	}
+	endMarker := `<a id="` + endID + `"></a>`
+	endIndex := strings.Index(body, endMarker)
+	if endIndex < 0 {
+		return "", fmt.Errorf("end anchor %q not found after %q", endID, startID)
+	}
+	section := body[:endIndex]
+	if strings.TrimSpace(section) == "" {
+		return "", fmt.Errorf("section %q..%q is empty", startID, endID)
+	}
+	return section, nil
+}
+
+func requireAnchorSection(t *testing.T, doc, startID, endID string) string {
+	t.Helper()
+	section, err := markdownAnchorSection(doc, startID, endID)
+	if err != nil {
+		t.Fatalf("anchor section %s..%s: %v", startID, endID, err)
+	}
+	return section
+}
+
+func TestMarkdownAnchorSectionFailsClosed(t *testing.T) {
+	doc := "<a id=\"a\"></a>\n### 中文标题\n正文内容\n<a id=\"b\"></a>\n第二节内容\n<a id=\"c\"></a>\n"
+	section, err := markdownAnchorSection(doc, "a", "b")
+	if err != nil {
+		t.Fatalf("valid section returned error: %v", err)
+	}
+	if !strings.Contains(section, "中文标题") || strings.Contains(section, "第二节内容") {
+		t.Fatalf("section bounds wrong: %q", section)
+	}
+	if _, err := markdownAnchorSection(doc, "missing", "b"); err == nil {
+		t.Fatal("missing start anchor must fail closed")
+	}
+	if _, err := markdownAnchorSection(doc, "a", "missing"); err == nil {
+		t.Fatal("missing end anchor must fail closed")
+	}
+	if _, err := markdownAnchorSection(doc, "b", "a"); err == nil {
+		t.Fatal("reversed anchors must fail closed")
+	}
+	if section, err := markdownAnchorSection(doc, "b", ""); err != nil || !strings.Contains(section, "第二节内容") {
+		t.Fatalf("open-ended section to EOF = %q, err = %v", section, err)
+	}
+	if _, err := markdownAnchorSection(doc, "c", ""); err == nil {
+		t.Fatal("anchor with no body (EOF) must fail closed")
 	}
 }
 

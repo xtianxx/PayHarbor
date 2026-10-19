@@ -1,8 +1,9 @@
-# PayHarbor Integration Guide
+# PayHarbor 集成指南
 
-This document is written for developers and AI coding agents integrating merchant systems with this payment gateway.
+本文档面向把商户系统接入本支付网关的开发者与 AI 编码代理。
 
-## Quick Summary
+<a id="quick-summary"></a>
+## 快速摘要
 
 ```yaml
 base_url: "https://your-gateway.example.com"
@@ -47,54 +48,58 @@ webhook:
     - sweep.dead_lettered.v1
 ```
 
-## Credentials
+<a id="credentials"></a>
+## 凭据
 
-A merchant domain has:
+一个商户域包含：
 
-- `api_key`: public API identifier.
-- `api_secret`: secret used for HMAC request signing. It is returned only when the domain is created or when the API secret is rotated.
-- `api_scopes`: comma-separated permission list. New credentials default to `read,payment:create,wallet:create,payout:create,refund:create,webhook:manage,transaction:rescan`; older empty-scope credentials are treated as legacy full access until explicitly narrowed.
-- `api_ip_allowlist`: optional comma-separated IP/CIDR allowlist for merchant API requests.
-- `webhook_secret`: secret used by the gateway to sign webhook callbacks.
-- `webhook_url`: single callback URL used for all currently supported webhook events.
-- `notification_mode`: `webhook` or `nats`; exactly one target is active for delivery.
-- `nats_url` / `nats_subject`: NATS server and subject used when `notification_mode` is `nats`.
+- `api_key`：公开的 API 标识。
+- `api_secret`：用于 HMAC 请求签名的密钥。只在创建域或轮换 API secret 时返回。
+- `api_scopes`：逗号分隔的权限列表。新凭据默认拥有 `read,payment:create,wallet:create,payout:create,refund:create,webhook:manage,transaction:rescan`；旧的空 scope 凭据在显式收窄之前按旧版全量权限处理。
+- `api_ip_allowlist`：可选的逗号分隔 IP/CIDR 允许列表，用于商户 API 请求。
+- `webhook_secret`：网关用于签名 Webhook 回调的密钥。
+- `webhook_url`：单一回调 URL，用于当前支持的全部 Webhook 事件。
+- `notification_mode`：`webhook` 或 `nats`；投递时恰好只有一个目标处于启用状态。
+- `nats_url` / `nats_subject`：当 `notification_mode` 为 `nats` 时使用的 NATS 服务器与主题。
 
-If the `api_secret` is lost, rotate it from the merchant portal endpoint:
+如果 `api_secret` 丢失，可通过商户门户端点轮换：
 
 ```http
 POST /merchant/domains/{domain_id}/rotate-api-secret
 ```
 
-The rotated secret is returned once in the response.
+轮换后的 secret 只会在响应中返回一次。
 
-Rotation policy is immediate revoke: the previous API secret stops authenticating as soon as the new secret hash is stored. A credential with `api_secret_revoked_at` set is rejected before request signing or business logic.
+轮换策略是立即吊销：新 secret 哈希写入后，旧 API secret 立刻无法通过认证。设置了 `api_secret_revoked_at` 的凭据会在请求签名与业务逻辑之前被拒绝。
 
-### Permission Scopes
+<a id="permission-scopes"></a>
+### 权限 Scope
 
-Signed mutating endpoints require the matching scope before business logic runs:
+需要签名的变更类端点在业务逻辑运行前要求匹配的 scope：
 
-| Scope | Typical endpoint family |
+| Scope | 典型端点族 |
 | --- | --- |
-| `read` | Status, balance, history, info and readiness reads. |
-| `payment:create` | Hosted payment and payment link creation. |
-| `wallet:create` | Static deposit address creation. |
-| `payout:create` | Payout creation. |
-| `refund:create` | Refund creation. |
-| `transaction:rescan` | Transaction rescan/replay. |
-| `webhook:manage` | Webhook configuration and replay management surfaces. |
+| `read` | 状态、余额、历史、信息与就绪类读取。 |
+| `payment:create` | 托管支付与支付链接创建。 |
+| `wallet:create` | 静态充值地址创建。 |
+| `payout:create` | 出账创建。 |
+| `refund:create` | 退款创建。 |
+| `transaction:rescan` | 交易重扫/重放。 |
+| `webhook:manage` | Webhook 配置与重放管理界面。 |
 
-IP allowlists are checked from the request source IP. Authentication failures are logged with category-level evidence such as `api_scope_denied` or `api_ip_not_allowed`; logs must not include API secrets, raw signatures, or full secret-bearing headers.
+IP 允许列表按请求来源 IP 检查。认证失败会以类别级证据记录，例如 `api_scope_denied` 或 `api_ip_not_allowed`；日志不得包含 API secret、原始签名或完整的含密文头。
 
-### Rate Limits
+<a id="rate-limits"></a>
+### 限流
 
-`/api/v1` traffic is rate-limited by API key or bearer token. In distributed/production scale mode the limiter must use the shared database-backed counter table, not process memory. If the shared store is unavailable in that mode, the API fails closed with a rate-limit store error.
+`/api/v1` 流量按 API key 或 bearer token 限流。在分布式/生产规模模式下，限流器必须使用共享的数据库计数表，而不是进程内存。若该模式下共享存储不可用，API 会以限流存储错误失败关闭。
 
-## Request Signing
+<a id="request-signing"></a>
+## 请求签名
 
-Write endpoints require HMAC signing.
+写端点要求 HMAC 签名。
 
-Signed endpoints include:
+需要签名的端点包括：
 
 - `POST /payments/create`
 - `POST /api/v1/payment/create`
@@ -105,13 +110,14 @@ Signed endpoints include:
 - `POST /api/v1/refund/create`
 - `POST /api/v1/transaction/rescan`
 
-Read endpoints generally require only `X-API-Key` or `Authorization: Bearer <api_key>`.
+读端点通常只需要 `X-API-Key` 或 `Authorization: Bearer <api_key>`。
 
-Before sending production traffic, call `GET /api/v1/common/readiness` with the domain API key. It returns `200` only when the database, production gates, configured chains, listener workers, Trust Wallet Core HD wallet derivation, and latest RPC/provider health snapshots are ready; otherwise it returns `503` with the failing checks. Provider health snapshots are collected by the background worker and redact raw RPC URLs.
+在生产流量之前，先用域 API key 调用 `GET /api/v1/common/readiness`。只有当数据库、生产门禁、已配置链、监听器 worker、Trust Wallet Core HD 钱包派生，以及最新的 RPC/provider 健康快照都就绪时才返回 `200`；否则返回 `503` 并列出失败检查项。Provider 健康快照由后台 worker 收集，并会抹除原始 RPC URL。
 
-### Signature Algorithm
+<a id="signature-algorithm"></a>
+### 签名算法
 
-V1 request signing binds method, original path/query target, timestamp, and raw body.
+V1 请求签名绑定方法、原始路径/查询目标、时间戳与原始请求体。
 
 ```text
 timestamp = current unix timestamp in seconds
@@ -123,11 +129,12 @@ signature = hex(HMAC_SHA256(api_secret, message))
 header = "sha256=" + signature
 ```
 
-For `POST /api/v1/payment/create`, the canonical prefix is `POST\n/api/v1/payment/create\n<timestamp>\n<body>`. If a signed endpoint includes query parameters, include them exactly as sent in `path_and_query`.
+对于 `POST /api/v1/payment/create`，规范前缀是 `POST\n/api/v1/payment/create\n<timestamp>\n<body>`。如果签名端点带查询参数，请在 `path_and_query` 中按实际发送形式原样包含它们。
 
-The gateway accepts `X-Gateway-Signature` as either `sha256=<hex>` or `<hex>`.
+网关接受 `X-Gateway-Signature` 为 `sha256=<hex>` 或 `<hex>`。
 
-### Node.js Signing Example
+<a id="nodejs-signing-example"></a>
+### Node.js 签名示例
 
 ```js
 import crypto from "crypto";
@@ -152,15 +159,16 @@ function sign(apiSecret, method, pathAndQuery, body) {
 }
 ```
 
-## Create Hosted Payment
+<a id="create-hosted-payment"></a>
+## 创建托管支付
 
-Use this when your customer should pay through the hosted checkout page.
+当你希望客户通过托管收银台页面付款时使用。
 
 ```http
 POST /api/v1/payment/create
 ```
 
-Request body:
+请求体：
 
 ```json
 {
@@ -176,9 +184,9 @@ Request body:
 }
 ```
 
-`settlement_policy` is optional and accepts `single` or `aggregate`. `required_memo` is optional; when present, finalized deposits must carry the normalized memo/tag/payment id to match this payment.
+`settlement_policy` 可选，接受 `single` 或 `aggregate`。`required_memo` 可选；提供后，最终确定的充值必须携带规范化后的 memo/tag/payment id 才能匹配该支付。
 
-Example:
+示例：
 
 ```bash
 BODY='{"order_id":"ORDER-1001","amount":"25.00","currency":"USD","description":"Order #1001","user_id":"customer_42","success_url":"https://merchant.example.com/success","cancel_url":"https://merchant.example.com/cancel"}'
@@ -195,7 +203,7 @@ curl -X POST "$BASE_URL/api/v1/payment/create" \
   --data "$BODY"
 ```
 
-Response shape:
+响应结构：
 
 ```json
 {
@@ -221,9 +229,9 @@ Response shape:
 }
 ```
 
-Send `Idempotency-Key` on create requests. If older client code still names this header `X-Idempotency-Key`, migrate it to `Idempotency-Key`; do not send both. A fresh create returns `201`; a retry with the same key and identical payload returns the cached create response with `200`.
+创建请求请发送 `Idempotency-Key`。如果旧客户端代码仍使用 `X-Idempotency-Key` 头，请迁移为 `Idempotency-Key`；不要同时发送两者。首次创建返回 `201`；使用相同 key 与相同 payload 重试会以 `200` 返回缓存的创建响应。
 
-Idempotency conflict example: reusing the same key with a different payload returns `409`:
+幂等冲突示例：使用相同 key 但不同 payload 会返回 `409`：
 
 ```json
 {
@@ -232,17 +240,18 @@ Idempotency conflict example: reusing the same key with a different payload retu
 }
 ```
 
-Customer completes payment at `checkout_url`.
+客户在 `checkout_url` 完成支付。
 
-## Create a Reusable Payment Link
+<a id="create-a-reusable-payment-link"></a>
+## 创建可复用支付链接
 
-Use this when the merchant wants a reusable URL backed by a product definition:
+当商户希望拥有一个由产品定义支撑的可复用 URL 时使用：
 
 ```http
 POST /api/v1/payment/link/create
 ```
 
-The request body is the payment-link product itself. `chain_id`, `symbol`, and optional `token` are an optional default asset. If they are omitted, the hosted checkout presents every available asset; for example, `chain_id=99999998`, `symbol=USDT`, and the TRON USDT token address starts checkout with TRON/USDT selected while still allowing the payer to change asset.
+请求体就是支付链接产品本身。`chain_id`、`symbol` 与可选 `token` 构成可选的默认资产。若省略，托管收银台会展示所有可用资产；例如 `chain_id=99999998`、`symbol=USDT` 并给出 TRON USDT 代币地址时，收银台会以 TRON/USDT 选中状态开始，但仍允许付款人切换资产。
 
 ```json
 {
@@ -257,17 +266,18 @@ The request body is the payment-link product itself. `chain_id`, `symbol`, and o
 }
 ```
 
-The payment webhook contains the original product definition under `product`. It is a session snapshot, so later edits to the reusable link do not change historical payment events. Direct one-off invoices created with `/api/v1/payment/create` do not have a reusable product resource and therefore omit this field.
+支付 Webhook 会在 `product` 下包含原始产品定义。它是会话快照，因此之后对可复用链接的编辑不会改变历史支付事件。通过 `/api/v1/payment/create` 创建的一次性发票没有可复用产品资源，因此会省略该字段。
 
-## Create Static Deposit Address
+<a id="create-static-deposit-address"></a>
+## 创建静态充值地址
 
-Use this when your system wants a permanent deposit address per user and asset.
+当你的系统希望为每个用户与资产提供永久充值地址时使用。
 
 ```http
 POST /api/v1/payment/static-address
 ```
 
-Request body:
+请求体：
 
 ```json
 {
@@ -280,7 +290,7 @@ Request body:
 }
 ```
 
-Response:
+响应：
 
 ```json
 {
@@ -300,19 +310,20 @@ Response:
 }
 ```
 
-Static addresses are deterministic inside the authenticated domain/product/user/asset scope. The asset scope is `chain_id`, `symbol`, and optional `token`; repeated calls for the same domain/product/user/asset return the existing address. Unsupported chains or assets return the V1 error envelope before wallet creation.
+静态地址在已认证的域/产品/用户/资产范围内是确定性的。资产范围由 `chain_id`、`symbol` 与可选 `token` 构成；对同一域/产品/用户/资产的重复调用会返回既有地址。不支持的链或资产会在创建钱包之前返回 V1 错误信封。
 
-Deposits to this address are detected by blockchain listeners and can generate transaction/payment webhooks depending on the matching flow.
+发往该地址的充值由区块链监听器检测，并可根据匹配流程产生交易/支付 Webhook。
 
-## Create Wallet Provider Wallet
+<a id="create-wallet-provider-wallet"></a>
+## 创建钱包提供方钱包
 
-Use this when your product needs PayHarbor to act as a wallet provider. The endpoint creates or returns one deterministic multi-chain wallet for a merchant user and product scope.
+当你的产品需要 PayHarbor 充当钱包提供方时使用。该端点会为商户用户与产品范围创建或返回一个确定性的多链钱包。
 
 ```http
 POST /api/v1/wallet/create
 ```
 
-Request body:
+请求体：
 
 ```json
 {
@@ -321,7 +332,7 @@ Request body:
 }
 ```
 
-Response:
+响应：
 
 ```json
 {
@@ -341,7 +352,7 @@ Response:
 }
 ```
 
-Read wallet data:
+读取钱包数据：
 
 ```http
 GET /api/v1/wallet/info?wallet_id=<uuid>
@@ -351,16 +362,17 @@ GET /api/v1/wallet/list?user_id=customer_42
 GET /api/v1/wallet/balance?wallet_id=<uuid>
 ```
 
-Wallet-provider deposits are matched by address and posted to the ledger for that wallet. Use `GET /api/v1/wallet/balance` for wallet-scoped balances and `GET /api/v1/common/balance` for domain aggregate balances.
+钱包提供方的充值按地址匹配，并记账到该钱包的账本。钱包维度余额使用 `GET /api/v1/wallet/balance`，域聚合余额使用 `GET /api/v1/common/balance`。
 
-## Query Payment
+<a id="query-payment"></a>
+## 查询支付
 
 ```http
 GET /api/v1/payment/info?order_id=ORDER-1001
 GET /api/v1/payment/info?track_id=<session_token>
 ```
 
-Payment info/history statuses:
+支付信息/历史状态：
 
 - `pending`
 - `awaiting_payment`
@@ -372,15 +384,15 @@ Payment info/history statuses:
 - `overpaid`
 - `partial_paid`
 
-`link_type` is `fixed` for ordinary invoices and `donation` for payment-link sessions where the payer chooses the crypto amount in their own wallet.
+普通发票的 `link_type` 为 `fixed`；对付款人在自己钱包中选择加密货币金额的支付链接会话，`link_type` 为 `donation`。
 
-Checkout polling uses:
+收银台轮询使用：
 
 ```http
 GET /checkout/{token}/status.json
 ```
 
-Example checkout status response:
+收银台状态响应示例：
 
 ```json
 {
@@ -401,7 +413,7 @@ Example checkout status response:
 }
 ```
 
-Documented checkout status values:
+已文档化的收银台状态值：
 
 - `active`
 - `pending`
@@ -418,19 +430,19 @@ Documented checkout status values:
 ["active", "pending", "confirming", "paid", "expired", "canceled", "failed", "underpaid", "overpaid", "partial_paid"]
 ```
 
-`payable` is false for terminal states or sessions that should not accept a new payment attempt. `terminal` is true for final payer-facing states such as `paid`, `expired`, `canceled`, `failed`, `underpaid`, `overpaid`, and non-aggregate `partial_paid`. Aggregate `partial_aggregating` sessions remain payable until the payment window expires or cumulative finalized amount reaches a terminal outcome.
+对于终态或不应再接受新支付尝试的会话，`payable` 为 false。对于 `paid`、`expired`、`canceled`、`failed`、`underpaid`、`overpaid` 以及非聚合的 `partial_paid` 等面向付款人的最终状态，`terminal` 为 true。聚合型 `partial_aggregating` 会话在支付窗口过期或累计最终确定金额达到终态结果之前保持可支付。
 
-Payment outcome metadata appears when a finalized deposit creates an exception outcome:
+当最终确定的充值产生异常结果时会出现支付结果元数据：
 
-- `payment_outcome`: `exact`, `aggregate_complete`, `partial_aggregating`, `underpaid`, `overpaid`, `partial_unsupported`, `expired_after_deposit`, `wrong_asset`, `wrong_chain`, `missing_memo`, or `wrong_memo`.
-- `payment_outcome_reason`: safe explanation for merchant/operator follow-up.
-- `matched_amount_raw`: raw integer amount received on-chain.
-- `shortfall_amount_raw`: raw integer shortfall for `underpaid` and `partial_paid`.
-- `excess_amount_raw`: raw integer excess for `overpaid`.
+- `payment_outcome`：`exact`、`aggregate_complete`、`partial_aggregating`、`underpaid`、`overpaid`、`partial_unsupported`、`expired_after_deposit`、`wrong_asset`、`wrong_chain`、`missing_memo` 或 `wrong_memo`。
+- `payment_outcome_reason`：供商户/操作员跟进的安全说明。
+- `matched_amount_raw`：链上收到的原始整数金额。
+- `shortfall_amount_raw`：`underpaid` 与 `partial_paid` 的原始整数缺口。
+- `excess_amount_raw`：`overpaid` 的原始整数超额。
 
-Exact single-deposit matches and policy-enabled aggregate matches can become `paid`. For aggregate-enabled sessions, finalized deposits are accumulated by raw amount, chain, token identity, decimals, address, and required memo/tag; `partial_aggregating` remains payable until the payment window expires, the cumulative finalized amount reaches the expected raw amount, or the session becomes overpaid. For non-aggregate sessions, a low partial deposit remains `partial_unsupported` according to the existing checkout policy. Any amount above expected becomes `overpaid`. Wrong asset, wrong chain, missing memo/tag, wrong memo/tag, and finalized-after-expiry deposits do not become paid.
+精确的单笔充值匹配与策略启用的聚合匹配可以变为 `paid`。对启用了聚合的会话，最终确定的充值按原始金额、链、代币身份、精度、地址与要求的 memo/tag 累计；`partial_aggregating` 在支付窗口过期、累计最终确定金额达到预期原始金额或会话变为超额支付之前保持可支付。对非聚合会话，偏低的零散充值按既有收银台策略保持 `partial_unsupported`。任何高于预期的金额都会变为 `overpaid`。错误资产、错误链、缺少 memo/tag、错误 memo/tag 以及过期后才最终确定的充值不会变为 `paid`。
 
-Terminal checkout example:
+终态收银台示例：
 
 ```json
 {
@@ -446,22 +458,23 @@ Terminal checkout example:
 }
 ```
 
-Detected deposits are held behind a confirmation gate before a payment becomes `paid`. If a finalized deposit is later invalidated by a reorg, the gateway reverses the ledger entries, marks the transaction `reorged`, and emits correction webhooks when callback settings are configured.
+检测到的充值会停在确认门禁之后，直到支付变为 `paid`。如果最终确定的充值随后被重组（reorg）作废，网关会冲正账本分录、把交易标记为 `reorged`，并在配置了回调设置时发出更正 Webhook。
 
-## Create Payout Request
+<a id="create-payout-request"></a>
+## 创建出账请求
 
-Use this to request a withdrawal from the merchant reserve wallet. The request is not broadcast immediately; admin approval is required.
+用于从商户储备钱包发起提现请求。请求不会立即广播；需要管理员批准。
 
 ```http
 POST /api/v1/payout/create
 Idempotency-Key: payout-ORDER-1001-v1
 ```
 
-`Idempotency-Key` is optional but recommended. A fresh create returns `201`. Reusing the same key with the same payload returns the same payout response with `200`; reusing it with a different payload returns `409`.
+`Idempotency-Key` 可选但建议提供。首次创建返回 `201`。使用相同 key 与相同 payload 会以 `200` 返回相同出账响应；使用不同 payload 则返回 `409`。
 
-Outbound security policy is enforced before the payout request is persisted. When configured by the platform operator, emergency freeze, address whitelist, per-transfer raw amount limit, and rolling velocity limit can reject the request with `400` and an `outbound policy rejects transfer: ...` message. Policy rejections are audit logged and do not create a ledger hold.
+出站安全策略在出账请求持久化之前执行。当平台操作员配置了紧急冻结、地址白名单、单笔原始金额上限与滚动速度上限时，请求可能以 `400` 与 `outbound policy rejects transfer: ...` 消息被拒绝。策略拒绝会记录审计日志，且不会创建账本 hold。
 
-Request body:
+请求体：
 
 ```json
 {
@@ -473,7 +486,7 @@ Request body:
 }
 ```
 
-Response:
+响应：
 
 ```json
 {
@@ -492,16 +505,16 @@ Response:
 }
 ```
 
-Payout statuses:
+出账状态：
 
-- `pending`: awaiting admin approval.
-- `processing`: approved and broadcast; awaiting finality evidence and ledger finalization.
-- `finalized`: finality evidence was observed and the ledger debit was finalized.
-- `approved`: legacy compatibility status; new terminal processing uses `finalized`.
-- `rejected`: rejected by admin.
-- `failed`: failed before broadcast, or requires operator reconciliation after broadcast uncertainty.
+- `pending`：等待管理员批准。
+- `processing`：已批准并广播；等待终局性证据与账本结算。
+- `finalized`：已观察到终局性证据，账本借方已结算。
+- `approved`：旧版兼容状态；新的终态处理使用 `finalized`。
+- `rejected`：被管理员拒绝。
+- `failed`：广播前失败，或广播结果不确定后需要操作员对账。
 
-Payout lifecycle events are sent as webhooks when a domain webhook is configured:
+当域配置了 Webhook 时，出账生命周期事件会作为 Webhook 发送：
 
 - `payout.requested.v1`
 - `payout.broadcast.v1`
@@ -509,29 +522,30 @@ Payout lifecycle events are sent as webhooks when a domain webhook is configured
 - `payout.rejected.v1`
 - `payout.failed.v1`
 
-Polling remains supported:
+轮询仍然支持：
 
 ```http
 GET /api/v1/payout/info?payout_id=<uuid>
 GET /api/v1/payout/history
 ```
 
-## Create Refund Request
+<a id="create-refund-request"></a>
+## 创建退款请求
 
-Use this to request refund of a paid payment. Admin approval is required before on-chain transfer.
+用于对已支付支付单发起退款。链上转账之前需要管理员批准。
 
 ```http
 POST /api/v1/refund/create
 Idempotency-Key: refund-ORDER-1001-v1
 ```
 
-`Idempotency-Key` is optional but recommended. A fresh create returns `201`. Reusing the same key with the same payload returns the same refund response with `200`; reusing it with a different payload returns `409`.
+`Idempotency-Key` 可选但建议提供。首次创建返回 `201`。使用相同 key 与相同 payload 会以 `200` 返回相同退款响应；使用不同 payload 则返回 `409`。
 
-Refund requests are also checked against the configured outbound policy before the refund hold is created. Destination whitelist checks run again during admin approval when the original sender address is known.
+退款请求在创建退款 hold 之前也会按已配置的出站策略检查。在原始发送地址已知时，管理员批准阶段会再次执行目标地址白名单检查。
 
-Concurrent refund requests for the same payment are serialised inside one database transaction, so the cumulative refundable limit for that payment is enforced atomically and cannot be exceeded by racing requests. This is a per-payment, read-only cap serialisation — it is not a whole-database deadlock guarantee: if the wallet's ledger asset is momentarily held by another operation, refund creation returns `503` and the caller may retry later with the same `Idempotency-Key`.
+针对同一支付单的并发退款请求会在单个数据库事务内串行化，因此该支付单的累计退款上限由原子校验保障，竞态请求无法突破。这是**按支付单**串行校验退款上限，并不保证整个数据库完全不会发生锁竞争：若钱包的账本资产暂时被其他操作持有，退款创建会返回 `503`，调用方可稍后以同一 `Idempotency-Key` 重试。
 
-Request body:
+请求体：
 
 ```json
 {
@@ -541,7 +555,7 @@ Request body:
 }
 ```
 
-Alternative identifier:
+替代标识：
 
 ```json
 {
@@ -550,17 +564,17 @@ Alternative identifier:
 }
 ```
 
-Refund statuses:
+退款状态：
 
 - `pending`
-- `processing`: approved and broadcast/finality is in progress.
-- `succeeded`: finality evidence was observed and the ledger refund debit was finalized.
+- `processing`：已批准，广播/终局性进行中。
+- `succeeded`：已观察到终局性证据，账本退款借方已结算。
 - `rejected`
 - `failed`
 
-Creating a refund request reserves the refundable amount in the ledger. Rejected refunds or refunds that fail before broadcast release that reservation. Broadcast success records `tx_hash`, source wallet, destination, asset metadata, and `broadcasted_at`; terminal success is queued only after finality evidence.
+创建退款请求会在账本中预留可退金额。被拒绝的退款或广播前失败的退款会释放该预留。广播成功会记录 `tx_hash`、来源钱包、目标地址、资产元数据与 `broadcasted_at`；只有观察到终局性证据后才会排队终态成功。
 
-Refund lifecycle events are sent as webhooks when a domain webhook is configured:
+当域配置了 Webhook 时，退款生命周期事件会作为 Webhook 发送：
 
 - `refund.requested.v1`
 - `refund.broadcast.v1`
@@ -568,22 +582,23 @@ Refund lifecycle events are sent as webhooks when a domain webhook is configured
 - `refund.rejected.v1`
 - `refund.failed.v1`
 
-Polling remains supported:
+轮询仍然支持：
 
 ```http
 GET /api/v1/refund/info?refund_id=<uuid>
 GET /api/v1/refund/history
 ```
 
-## Transaction Rescan
+<a id="transaction-rescan"></a>
+## 交易重扫
 
-Use this when a blockchain transaction exists but was not processed or needs replay.
+当链上交易已存在但未被处理，或需要重放时使用。
 
 ```http
 POST /api/v1/transaction/rescan
 ```
 
-Request body:
+请求体：
 
 ```json
 {
@@ -592,36 +607,38 @@ Request body:
 }
 ```
 
-The gateway re-fetches the transaction and replays wallet matching, payment matching, ledger posting, and webhook processing.
+网关会重新拉取交易，并重放钱包匹配、支付匹配、账本记账与 Webhook 处理。
 
-## Webhooks
+<a id="webhooks"></a>
+## Webhook
 
-The gateway uses one callback URL per domain. The merchant integration should route by `event_type` in the JSON body or by `X-Gateway-Event` header.
+网关为每个域使用一个回调 URL。商户集成应按 JSON 体中的 `event_type` 或 `X-Gateway-Event` 头进行路由。
 
-Webhook egress is hardened: the gateway never follows HTTP redirects (a `3xx` response is a delivery failure, so the signed payload is never replayed to a redirect target), it ignores environment `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` settings, and every new connection re-resolves and validates the callback destination before dialling, so a hostname that resolves to a private or otherwise non-public address is refused even when the URL was validated earlier. Outside production, local development receivers (private/loopback addresses such as `http://127.0.0.1:3000/...`) remain usable; production only delivers to public HTTPS destinations.
+Webhook 出站经过加固：网关从不跟随 HTTP 重定向（`3xx` 响应视为投递失败，因此签名 payload 绝不会被重放到重定向目标），忽略环境中的 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 设置，并且每次新建连接都会在拨号前重新解析并校验回调目标，因此即便 URL 早先通过校验，解析到私有或其他非公开地址的主机名仍会被拒绝。非生产环境下，本地开发接收端（如 `http://127.0.0.1:3000/...` 等私有/回环地址）仍可使用；生产环境只投递到公开的 HTTPS 目标。
 
-For NATS delivery, create or update the domain with `notification_mode: "nats"`, `nats_url`, and an optional `nats_subject` (default: `gateway.events`). The same JSON event body is published to that subject through JetStream; webhook HMAC headers are used only in `webhook` mode.
+对于 NATS 投递，请以 `notification_mode: "nats"`、`nats_url` 与可选的 `nats_subject`（默认 `gateway.events`）创建或更新域。相同的 JSON 事件体通过 JetStream 发布到该主题；Webhook HMAC 头只在 `webhook` 模式下使用。
 
-### JetStream provisioning and delivery durability
+<a id="jetstream-provisioning-and-delivery-durability"></a>
+### JetStream 预置与投递持久性
 
-The NATS account owner must provision the JetStream stream before enabling the domain. The gateway is publish-only: it does not create or update merchant-owned streams or consumers. The stream subject (or a stream wildcard) must match the domain's configured `nats_subject`; otherwise publishing fails and the delivery remains eligible for retry.
+NATS 账号所有者必须在启用该域之前预置 JetStream stream。网关只负责发布：它不会创建或更新商户拥有的 stream 或 consumer。stream 主题（或 stream 通配符）必须匹配域配置的 `nats_subject`；否则发布会失败，投递仍保持可重试。
 
-Use the following production baseline:
+请使用以下生产基线：
 
-- `FileStorage`, so acknowledged messages survive a server restart.
-- `LimitsPolicy` retention with `MaxAge` of 7 days recommended and never less than 24 hours. Size and message-count limits must also be high enough not to evict events earlier than that operating window.
-- A `DuplicateWindow` of 24 hours. The gateway sets `Nats-Msg-Id` to `delivery_id`, falling back to `event_id` and then the delivery idempotency key when older/direct calls have no delivery ID.
-- A named durable consumer with explicit acknowledgements. A consumer should acknowledge only after its own processing commit and should remain idempotent by `delivery_id` because a retry outside the duplicate window can be delivered again.
+- `FileStorage`，使已确认的消息在服务器重启后仍存在。
+- `LimitsPolicy` 保留策略，建议 `MaxAge` 为 7 天且绝不短于 24 小时。大小与消息数量上限也必须足够高，避免早于该运营窗口淘汰事件。
+- `DuplicateWindow` 为 24 小时。网关把 `Nats-Msg-Id` 设为 `delivery_id`，在较旧/直接调用没有 delivery ID 时依次回退到 `event_id` 与投递幂等键。
+- 带显式确认的命名 durable consumer。consumer 应仅在自身处理提交后确认，并应按 `delivery_id` 保持幂等，因为重复窗口之外的重试可能再次投递。
 
-Both HTTP and NATS notifications use the same Postgres `webhook_deliveries` queue/outbox boundary. An HTTP delivery closes only after a 2xx response. A NATS delivery closes only after synchronous JetStream publish returns a non-nil `PubAck`; a duplicate `PubAck` is also success because JetStream already persisted that message ID. Connection, publish, timeout, error-ack, and missing-ack outcomes leave the row in the normal retry/dead-letter flow. Once a `PubAck` is received, the row is marked delivered and the gateway does not publish it again during ordinary retries; JetStream owns retention from that point.
+HTTP 与 NATS 通知共用同一个 Postgres `webhook_deliveries` 队列/outbox 边界。HTTP 投递只在收到 2xx 响应后关闭。NATS 投递只在同步 JetStream 发布返回非 nil `PubAck` 后关闭；重复的 `PubAck` 也算成功，因为 JetStream 已持久化该消息 ID。连接、发布、超时、错误确认与确认缺失都会让该行进入正常的重试/死信流程。收到 `PubAck` 后，该行被标记为已投递，网关在普通重试中不会再发布它；此后由 JetStream 负责保留。
 
-This is an at-least-once boundary. If JetStream persists a message but the acknowledgement is lost, the gateway retries the same `Nats-Msg-Id`; the 24-hour duplicate window collapses that ambiguity. Consumers must still enforce idempotency for replays and retries beyond that window.
+这是至少一次（at-least-once）边界。若 JetStream 已持久化消息但确认丢失，网关会用同一 `Nats-Msg-Id` 重试；24 小时重复窗口会消除该歧义。消费者仍必须对超出该窗口的重放与重试保持幂等。
 
-The versioned money event catalog is maintained in `docs/money-event-catalog.md`. It maps current emitted names, legacy underscore aliases, and canonical dotted event names without replacing the examples below.
+带版本的资金事件目录维护在 `docs/money-event-catalog.md`。它映射当前发出的事件名、旧版下划线别名与规范点分事件名，但不替换下面的示例。
 
-Canonical dotted event examples include `deposit.detected.v1`, `payment.succeeded.v1`, `payment.failed.v1`, `refund.succeeded.v1`, and `webhook.delivery.failed.v1`. Existing emitted names such as `native_transfer`, `payment_succeeded`, and `payment_failed` remain compatibility aliases where the catalog marks them as legacy or current aliases.
+规范点分事件示例包括 `deposit.detected.v1`、`payment.succeeded.v1`、`payment.failed.v1`、`refund.succeeded.v1` 与 `webhook.delivery.failed.v1`。既有的发出名（如 `native_transfer`、`payment_succeeded`、`payment_failed`）在目录中标记为旧版或当前别名时仍作为兼容别名保留。
 
-Headers:
+请求头：
 
 ```text
 X-Gateway-Event: payment_succeeded
@@ -636,9 +653,10 @@ X-Gateway-Timestamp: <unix_seconds>
 X-Gateway-Signature: sha256=<hmac_sha256_hex(timestamp + raw_body)>
 ```
 
-Verify webhooks with the domain `webhook_secret`, not the API secret.
+请用域的 `webhook_secret`（而不是 API secret）校验 Webhook。
 
-### Webhook Verification Example
+<a id="webhook-verification-example"></a>
+### Webhook 校验示例
 
 ```js
 import crypto from "crypto";
@@ -655,33 +673,35 @@ function verifyWebhook(webhookSecret, timestamp, rawBody, receivedSignature) {
 }
 ```
 
-Reject webhooks when:
+出现以下情况时拒绝 Webhook：
 
-- Timestamp is too old or too far in the future.
-- Signature is invalid.
-- `event_id` was already processed.
+- 时间戳过旧或过于超前。
+- 签名无效。
+- `event_id` 已被处理。
 
-### Delivery, Replay, and Deduplication
+<a id="delivery-replay-and-deduplication"></a>
+### 投递、重放与去重
 
-Webhook delivery is at-least-once. Retries and operator replay can deliver the same event more than once. A replay preserves the original event id, event type, event version, merchant/domain scope, and payload idempotency fields so consumers can safely deduplicate.
+Webhook 投递是至少一次。重试与操作员重放可能多次投递同一事件。重放会保留原始 event id、event type、event version、商户/域范围与 payload 幂等字段，因此消费者可以安全去重。
 
-For a single `domain_id` + `resource_type` + `resource_id`, deliveries include a monotonic `sequence`. The gateway will not claim a later active delivery for that resource while an earlier pending, failed, or processing delivery is still active. Consumers should still store the sequence and process lower sequence values first for the same resource because HTTP delivery is at-least-once and client-side recovery may retry.
+对单个 `domain_id` + `resource_type` + `resource_id`，投递包含单调 `sequence`。当该资源较早的 pending、failed 或 processing 投递仍处于活动状态时，网关不会认领更晚的活动投递。消费者仍应保存 sequence，并对同一资源先处理较小的 sequence 值，因为 HTTP 投递是至少一次且客户端恢复可能重试。
 
-Use these fields as the consumer dedupe key:
+请把以下字段用作消费方去重键：
 
-- `X-Gateway-Event-Id` header and `event_id` payload field.
-- `X-Gateway-Idempotency-Key` header and `idempotency_key` payload field.
-- `X-Gateway-Event` / `event_type`.
-- `X-Gateway-Event-Version` / `event_version`.
-- `merchant_id` and `domain_id` scope.
+- `X-Gateway-Event-Id` 头与 `event_id` payload 字段。
+- `X-Gateway-Idempotency-Key` 头与 `idempotency_key` payload 字段。
+- `X-Gateway-Event` / `event_type`。
+- `X-Gateway-Event-Version` / `event_version`。
+- `merchant_id` 与 `domain_id` 范围。
 
-Use `delivery_id` for attempt/replay audit only. A replay can have a new `delivery_id` while preserving the original business `event_id` and idempotency key.
+`delivery_id` 仅用于尝试/重放审计。一次重放可以拥有新的 `delivery_id`，同时保留原始业务 `event_id` 与幂等键。
 
-Persist the dedupe decision before fulfilling an order, crediting an account, or triggering irreversible downstream work. A replay should be treated as recovery of the same event, not as a new business event.
+在履约订单、入账账户或触发不可逆下游工作之前，先持久化去重决定。重放应被视为同一事件的恢复，而不是新的业务事件。
 
-### Transaction Webhook Payload
+<a id="transaction-webhook-payload"></a>
+### 交易 Webhook Payload
 
-Event example: `native_transfer`
+事件示例：`native_transfer`
 
 ```json
 {
@@ -709,15 +729,16 @@ Event example: `native_transfer`
 }
 ```
 
-Transaction webhook `event_id` is `<transaction_unique_hash>:<event_type>`, so a later `transaction.reorged.v1` correction for the same transaction has a distinct idempotency key. Reorg corrections include `original_event_id`, `original_resource_id`, and `correction_reason` so consumers can relate the correction to the prior transaction event without deleting prior history. When the reorg also corrects a payment lifecycle, the resulting `payment.failed.v1` payload includes those relation fields and references the prior payment lifecycle event when it can be derived from the preserved payment outcome.
+交易 Webhook 的 `event_id` 是 `<transaction_unique_hash>:<event_type>`，因此同一交易后续的 `transaction.reorged.v1` 更正会拥有不同的幂等键。重组更正包含 `original_event_id`、`original_resource_id` 与 `correction_reason`，使消费者能把更正关联到先前的交易事件而不删除历史。当重组同时更正支付生命周期时，产生的 `payment.failed.v1` payload 会包含这些关联字段，并在能从保留的支付结果推导时引用先前的支付生命周期事件。
 
-The existing underscore webhook event names remain compatibility aliases until a versioned event catalog migration explicitly retires them.
+既有的下划线 Webhook 事件名作为兼容别名保留，直到带版本的事件目录迁移明确将其退役。
 
-The full versioned money lifecycle catalog is documented in `docs/money-event-catalog.md`.
+完整的带版本资金生命周期目录记录在 `docs/money-event-catalog.md`。
 
-### Payment Webhook Payload
+<a id="payment-webhook-payload"></a>
+### 支付 Webhook Payload
 
-Event examples:
+事件示例：
 
 - `payment_succeeded`
 - `payment_failed`
@@ -775,9 +796,10 @@ Event examples:
 }
 ```
 
-### Lifecycle Webhook Payload
+<a id="lifecycle-webhook-payload"></a>
+### 生命周期 Webhook Payload
 
-Event examples:
+事件示例：
 
 - `payout.finalized.v1`
 - `refund.succeeded.v1`
@@ -814,63 +836,71 @@ Event examples:
 }
 ```
 
-## Recommended Merchant-Side Flow
+<a id="recommended-merchant-side-flow"></a>
+## 推荐的商户侧流程
 
-### Hosted Checkout Flow
+<a id="hosted-checkout-flow"></a>
+### 托管收银台流程
 
-1. Merchant backend creates a payment with `POST /api/v1/payment/create`.
-2. Merchant redirects customer to `checkout_url`.
-3. Customer selects chain/asset and pays.
-4. PayHarbor detects blockchain transaction.
-5. PayHarbor marks payment `paid`.
-6. PayHarbor sends `payment_succeeded` webhook to the domain callback URL.
-7. Merchant verifies webhook signature.
-8. Merchant idempotently fulfills `order_id`.
+1. 商户后端用 `POST /api/v1/payment/create` 创建支付。
+2. 商户把客户重定向到 `checkout_url`。
+3. 客户选择链/资产并付款。
+4. PayHarbor 检测区块链交易。
+5. PayHarbor 把支付标记为 `paid`。
+6. PayHarbor 向域回调 URL 发送 `payment_succeeded` Webhook。
+7. 商户校验 Webhook 签名。
+8. 商户按 `order_id` 幂等地履约。
 
-### Static Address Flow
+<a id="static-address-flow"></a>
+### 静态地址流程
 
-1. Merchant backend creates/reuses address with `POST /api/v1/payment/static-address`.
-2. Merchant shows the address to the customer.
-3. PayHarbor detects deposits to the address.
-4. PayHarbor sends transaction webhook events to the domain callback URL.
-5. Merchant verifies signature and credits the user based on `event_id`.
+1. 商户后端用 `POST /api/v1/payment/static-address` 创建/复用地址。
+2. 商户把地址展示给客户。
+3. PayHarbor 检测发往该地址的充值。
+4. PayHarbor 向域回调 URL 发送交易 Webhook 事件。
+5. 商户校验签名，并按 `event_id` 为用户入账。
 
-### Payout Flow
+<a id="payout-flow"></a>
+### 出账流程
 
-1. Merchant backend creates payout request with `POST /api/v1/payout/create`.
-2. Admin approves or rejects in the admin panel.
-3. Broadcasted payouts remain `processing` until finality evidence is observed.
-4. Merchant polls `GET /api/v1/payout/info`.
-5. Merchant treats `finalized`, `rejected`, and pre-broadcast `failed` as terminal states. Post-broadcast uncertainty stays operator-recoverable.
+1. 商户后端用 `POST /api/v1/payout/create` 创建出账请求。
+2. 管理员在管理面板批准或拒绝。
+3. 已广播的出账在观察到终局性证据之前保持 `processing`。
+4. 商户轮询 `GET /api/v1/payout/info`。
+5. 商户把 `finalized`、`rejected` 与广播前的 `failed` 视为终态。广播后的不确定状态仍可由操作员恢复。
 
-### Refund Flow
+<a id="refund-flow"></a>
+### 退款流程
 
-1. Merchant backend creates refund request with `POST /api/v1/refund/create`.
-2. Admin approves or rejects in the admin panel.
-3. Broadcasted refunds remain `processing` until finality evidence is observed.
-4. Merchant polls `GET /api/v1/refund/info`.
-5. Merchant treats `succeeded`, `rejected`, and pre-broadcast `failed` as terminal states. Post-broadcast uncertainty stays operator-recoverable.
+1. 商户后端用 `POST /api/v1/refund/create` 创建退款请求。
+2. 管理员在管理面板批准或拒绝。
+3. 已广播的退款在观察到终局性证据之前保持 `processing`。
+4. 商户轮询 `GET /api/v1/refund/info`。
+5. 商户把 `succeeded`、`rejected` 与广播前的 `failed` 视为终态。广播后的不确定状态仍可由操作员恢复。
 
-## Idempotency Rules
+<a id="idempotency-rules"></a>
+## 幂等规则
 
-Merchant systems should store and deduplicate:
+商户系统应存储并去重：
 
-- Payment webhook: `event_id`
-- Transaction webhook: `event_id`
-- Ordered webhook processing: `domain_id`, `resource_type`, `resource_id`, and `sequence`.
-- Replay-safe webhook audit: `delivery_id` plus `original_delivery_id` when present.
-- Payment create: use `Idempotency-Key` header, or rely on `order_id` fallback.
-- Payout/refund create: use `Idempotency-Key` for replay-safe request creation, and store returned `payout_id` / `refund_id`.
+- 支付 Webhook：`event_id`
+- 交易 Webhook：`event_id`
+- 有序 Webhook 处理：`domain_id`、`resource_type`、`resource_id` 与 `sequence`。
+- 重放安全的 Webhook 审计：`delivery_id`，存在时加上 `original_delivery_id`。
+- 支付创建：使用 `Idempotency-Key` 头，或依赖 `order_id` 回退。
+- 出账/退款创建：使用 `Idempotency-Key` 实现重放安全的请求创建，并保存返回的 `payout_id` / `refund_id`。
 
-Never fulfill an order based only on frontend return URLs. Always use webhook verification or server-side payment status query.
+绝不要仅凭前端返回 URL 履约订单。始终使用 Webhook 校验或服务端支付状态查询。
 
-## Contract Evidence - Epic 1
+<a id="contract-evidence---epic-1"></a>
+## 契约证据 - Epic 1
 
-Partner API Contract Evidence is in `docs/epic-1-integration-evidence.md`. It lists covered endpoints, auth modes, idempotency behavior, static wallet domain/product/user/asset scope, checkout state semantics, and known limitations for merchant/domain and tenant/domain isolation. Known production limitations are summarized below and expanded in the evidence file.
+合作方 API 契约证据在 `docs/epic-1-integration-evidence.md`。它列出了覆盖的端点、认证模式、幂等行为、静态钱包的域/产品/用户/资产范围、收银台状态语义，以及商户/域与租户/域隔离的已知限制。已知生产限制在下方概述，并在证据文件中展开。
 
-## Error Handling
+<a id="error-handling"></a>
+## 错误处理
 
-Common API errors:
+常见 API 错误：
 
 ```json
 {
@@ -879,9 +909,9 @@ Common API errors:
 }
 ```
 
-HMAC failure example: if the `X-Gateway-Signature` was calculated over a different method, path/query, timestamp, or raw body, the API returns the same V1 error envelope with `invalid request signature`.
+HMAC 失败示例：如果 `X-Gateway-Signature` 是基于不同的方法、路径/查询、时间戳或原始请求体计算的，API 会返回相同的 V1 错误信封，消息为 `invalid request signature`。
 
-Timestamp and replay failure examples:
+时间戳与重放失败示例：
 
 ```json
 {
@@ -897,36 +927,38 @@ Timestamp and replay failure examples:
 }
 ```
 
-The same V1 envelope is used for validation failures, idempotency conflicts, unsupported assets, expired or unavailable sessions, and authorization failures. Error messages are category-level and must not expose API secrets, raw signatures, stack traces, or whether another tenant/domain owns a resource.
+同一个 V1 信封用于校验失败、幂等冲突、不支持的资产、过期或不可用会话以及授权失败。错误消息是类别级的，不得暴露 API secret、原始签名、堆栈跟踪，也不得暴露资源是否属于其他租户/域。
 
-Webhook delivery behavior:
+Webhook 投递行为：
 
-- PayHarbor retries failed webhook deliveries.
-- PayHarbor may replay a failed or dead-lettered webhook with the same event id/type/version.
-- PayHarbor preserves per-resource ordering for active delivery lanes.
-- Merchant endpoint should return any `2xx` status after successfully persisting the event.
-- Merchant endpoint should be idempotent because retries can happen.
+- PayHarbor 会重试失败的 Webhook 投递。
+- PayHarbor 可能以相同 event id/type/version 重放失败或已死信的 Webhook。
+- PayHarbor 为活动投递通道保留资源级顺序。
+- 商户端点在成功持久化事件后应返回任意 `2xx` 状态。
+- 商户端点应保持幂等，因为重试可能发生。
 
-## Security Checklist
+<a id="security-checklist"></a>
+## 安全检查清单
 
-- Keep `api_secret` server-side only.
-- Keep `webhook_secret` server-side only.
-- Verify request/webhook signatures using raw request body bytes.
-- Reject old timestamps.
-- Deduplicate webhook `event_id`.
-- Do not process unsigned callbacks.
-- Do not expose API secret in frontend code.
+- `api_secret` 只保留在服务端。
+- `webhook_secret` 只保留在服务端。
+- 使用原始请求体字节校验请求/Webhook 签名。
+- 拒绝过旧的时间戳。
+- 对 Webhook `event_id` 去重。
+- 不要处理未签名的回调。
+- 不要在前端代码中暴露 API secret。
 
-## Known Production Limitations
+<a id="known-production-limitations"></a>
+## 已知生产限制
 
-Epic 1 hardens partner intake, hosted checkout state, static address scope, idempotency, and integration evidence. It is controlled-launch evidence, not a claim of production custody or exchange-grade readiness.
+Epic 1 加固了合作方接入、托管收银台状态、静态地址范围、幂等与集成证据。它是受控发布证据，不是生产托管或交易所级就绪的声明。
 
-Production custody remains gated.
+生产托管仍受门禁约束。
 
-Provider health metrics and readiness checks expose stale/unhealthy RPC signals and health-aware failover decisions, but they are not full archive/quorum exchange infrastructure.
+Provider 健康指标与就绪检查会暴露 stale/unhealthy RPC 信号以及健康感知的故障转移决策，但它们不是完整的 archive/quorum 交易所基础设施。
 
-Production migration discipline is GORM-based and versioned through `services/dbmigrations`; raw SQL migration files are not the source of truth in this repo. Production readiness requires `GATEWAY_DB_MIGRATION_VERSION` to match the latest artifact and `services/database.VerifySchema` to pass.
+生产迁移纪律基于 GORM 并通过 `services/dbmigrations` 版本化；原始 SQL 迁移文件不是本仓库的事实来源。生产就绪要求 `GATEWAY_DB_MIGRATION_VERSION` 与最新工件一致，并通过 `services/database.VerifySchema`。
 
-Money-path observability and launch evidence are documented in `docs/money-path-observability-runbook.md` and `docs/controlled-launch-readiness.md`.
+资金链路可观测性与发布证据记录在 `docs/money-path-observability-runbook.md` 与 `docs/controlled-launch-readiness.md`。
 
-Do not treat the gateway as production custody/exchange-ready until the external signer boundary, reconciliation jobs, ledger-derived balances, versioned GORM migrations, observability/SLOs, backup/restore, compliance controls, archive/quorum provider strategy, and controlled launch gates are complete.
+在外部签名器边界、对账任务、账本派生余额、带版本的 GORM 迁移、可观测性/SLO、备份/恢复、合规控制、archive/quorum provider 策略与受控发布门禁全部完成之前，不要把本网关视为生产托管/交易所级就绪。

@@ -90,7 +90,7 @@ go run . -install
 
 `-install` 执行迁移与种子步骤后会继续启动 HTTP 服务，不会自动退出。后续启动可使用 `go run .`（默认监听 `:3001`）。
 
-不使用宿主网络的隔离验证栈见 [Offline Development Environment](docs/offline-development.md)；容器化基线测试与门禁见 [Baseline Test Harness](deploy/compose/baseline/README.md)。
+不使用宿主网络的隔离验证栈见[离线开发环境](docs/offline-development.md)；容器化基线测试与门禁见[基线测试栈](deploy/compose/baseline/README.md)。
 
 ## 安全要点
 
@@ -113,12 +113,12 @@ go test ./services/outboundobserver/   # 只读链上观察组件回归
 
 ## 文档
 
-- [开发者指南](docs/developer-guide.md)（英文）：本地开发循环、迁移、worker、测试与 PR 约定。
-- [离线开发环境](docs/offline-development.md)（英文）：`GATEWAY_OFFLINE=true`，无监听器、无资金 worker、无出站流量。
-- [基线测试栈](deploy/compose/baseline/README.md)（英文）：Prepare/Build/Test/Smoke 四阶段，内部网络不发布宿主端口。
-- [资金链路可观测性手册](docs/money-path-observability-runbook.md) 与 [归集运维手册](docs/sweep-operations-runbook.md)（英文）。
-- [集成指南](docs/integration-guide.md)（英文）。
-- [项目笔记（中文）](docs/portfolio.md)：架构与验证说明。
+- [开发者指南](docs/developer-guide.md)：本地开发循环、迁移、worker、测试与 PR 约定。
+- [离线开发环境](docs/offline-development.md)：`GATEWAY_OFFLINE=true`，无监听器、无资金 worker、无出站流量。
+- [基线测试栈](deploy/compose/baseline/README.md)：Prepare/Build/Test/Smoke 四阶段，内部网络不发布宿主端口。
+- [资金链路可观测性手册](docs/money-path-observability-runbook.md) 与 [归集运维手册](docs/sweep-operations-runbook.md)。
+- [集成指南](docs/integration-guide.md)：签名、端点、状态、Webhook 与错误处理契约。
+- [项目笔记](docs/portfolio.md)：架构与验证说明。
 
 ## 已知边界
 

@@ -1,30 +1,32 @@
-# Developer Guide
+# 开发者指南
 
-Language: **English** | [简体中文](../README.md) — language navigation lives in the root README.
+Language: **简体中文**（本指南为中文版本；仓库暂无同篇英文译本）| [English README](../README.en.md)
 
-This guide explains how to develop Gateway safely. Use it with the main README, the integration guide, and the module-boundary documents when opening a feature branch or reviewing a money-path change.
+本指南说明如何安全地开发 Gateway。开启特性分支或评审资金链路改动时，请结合主 README、集成指南与模块边界文档一起使用。
 
-## First Read
+<a id="first-read"></a>
+## 首先阅读
 
-- Start with `README.md` for setup, environment variables, runtime commands, and API overview.
-- Read `docs/module-boundaries.md` before changing deposits, payments, ledger, outbound flows, webhooks, reconciliation, listeners, or workers.
-- Read `docs/production-migration-discipline.md` before adding or changing persisted state.
-- Read `docs/integration-guide.md` before changing `/api/v1` partner API behavior.
-- Read `docs/money-event-catalog.md` before adding, renaming, or changing webhook/money events.
+- 从 `README.md` 开始，了解环境搭建、环境变量、运行命令与 API 概览。
+- 修改充值、支付、账本、出站流程、Webhook、对账、监听器或 worker 之前，先读 `docs/module-boundaries.md`。
+- 新增或修改持久化状态之前，先读 `docs/production-migration-discipline.md`。
+- 修改 `/api/v1` 合作方 API 行为之前，先读 `docs/integration-guide.md`。
+- 新增、重命名或修改 Webhook/资金事件之前，先读 `docs/money-event-catalog.md`。
 
-## Local Setup
+<a id="local-setup"></a>
+## 本地环境搭建
 
-Gateway is a Go modular monolith with PostgreSQL, GORM, Fiber v3, server-rendered HTML, Tailwind CSS, and Trust Wallet Core.
+Gateway 是一个 Go 模块化单体，使用 PostgreSQL、GORM、Fiber v3、服务端渲染 HTML、Tailwind CSS 与 Trust Wallet Core。
 
-Required local tools:
+本地必需工具：
 
 - Go `1.25.4`
 - PostgreSQL
-- Node.js and npm
-- Git submodule support
-- Native build tooling required by Trust Wallet Core, through `scripts/build_wallet_core.sh`
+- Node.js 与 npm
+- Git 子模块支持
+- Trust Wallet Core 所需的原生构建工具链，通过 `scripts/build_wallet_core.sh` 使用
 
-One-time setup:
+一次性初始化：
 
 ```bash
 git submodule update --init --recursive third_party/trustwallet/wallet-core
@@ -35,246 +37,244 @@ npm run build:css
 cp .env.sample .env
 ```
 
-The Trust Wallet Core submodule is required because `go.mod` replaces `tw` with `./third_party/trustwallet/wallet-core/samples/go`. If `go test`, `go run`, or `go mod download` fails with a missing `tw` replacement directory, initialize the submodule instead of removing the replace directive.
+必须初始化 Trust Wallet Core 子模块，因为 `go.mod` 把 `tw` replace 到 `./third_party/trustwallet/wallet-core/samples/go`。如果 `go test`、`go run` 或 `go mod download` 报缺少 `tw` 替换目录，请初始化子模块，而不是删掉 replace 指令。
 
-Use development-only secrets and a development-only mnemonic in `.env`. Never commit real keys, production mnemonics, webhook secrets, API secrets, or RPC credentials.
+`.env` 中请使用仅用于开发的密钥与仅用于开发的助记词。绝不要提交真实密钥、生产助记词、Webhook secret、API secret 或 RPC 凭据。
 
-## Development Loop
+<a id="development-loop"></a>
+## 开发循环
 
-Initialize or update the local database:
+初始化或更新本地数据库：
 
 ```bash
 go run . -migrate
 go run . -seed
 ```
 
-Use `-install` when you want both migration and seed:
+当你想同时执行迁移与种子时使用 `-install`：
 
 ```bash
 go run . -install
 ```
 
-Run the app directly:
+直接运行应用：
 
 ```bash
 go run .
 ```
 
-Run with Go and HTML auto-reload:
+使用 Go 与 HTML 自动重载运行：
 
 ```bash
 go install github.com/air-verse/air@latest
 npm run dev
 ```
 
-Open `http://localhost:3000` when using Air. Air proxies to the application port from `.env`, normally `PORT=:3001`. If you change `PORT`, update `.air.toml` `proxy.app_port` as well.
+使用 Air 时打开 `http://localhost:3000`。Air 会代理到 `.env` 中的应用端口，通常是 `PORT=:3001`。若修改 `PORT`，请同时更新 `.air.toml` 的 `proxy.app_port`。
 
-When editing Tailwind source CSS, run this in a second terminal:
+编辑 Tailwind 源 CSS 时，在第二个终端运行：
 
 ```bash
 npm run dev:css
 ```
 
-Build generated/minified CSS before committing view or CSS changes:
+提交视图或 CSS 改动之前，先构建生成的/压缩后的 CSS：
 
 ```bash
 npm run build:css
 ```
 
-## Runtime Shape
+<a id="runtime-shape"></a>
+## 运行时结构
 
-Application startup flows through `main.go`:
+应用启动流程都经过 `main.go`：
 
-- `.env` is loaded.
-- The database is initialized from `DATABASE_URL`.
-- `routes.NewRouter` builds the Fiber app, repositories, services, chain factory, asset registry, payment hub, portals, `/api/v1`, metrics, Swagger, and docs routes.
-- `services/database.Migrate` runs startup migrations outside production, or verifies schema in production.
-- The worker supervisor starts periodic workers.
-- Address index loading, admin bootstrap, chain infrastructure, and the HTTP server start.
+- 加载 `.env`。
+- 依据 `DATABASE_URL` 初始化数据库。
+- `routes.NewRouter` 构建 Fiber 应用、repositories、services、chain factory、asset registry、payment hub、门户、`/api/v1`、metrics、Swagger 与 docs 路由。
+- `services/database.Migrate` 在非生产环境执行启动迁移，在生产环境校验 schema。
+- worker supervisor 启动周期性 worker。
+- 地址索引加载、管理员引导、链基础设施与 HTTP 服务器启动。
 
-The main composition root is `application.CORE`. New shared dependencies should be wired through the composition root and `api/routes/routes.go` instead of hidden package globals.
+主要组合根是 `application.CORE`。新的共享依赖应通过组合根与 `api/routes/routes.go` 接线，而不是隐藏在包级全局变量里。
 
-## Code Ownership
+<a id="code-ownership"></a>
+## 代码归属边界
 
-Use the existing package boundaries:
+请沿用既有包边界：
 
-| Area | Where to change |
+| 领域 | 改动位置 |
 | --- | --- |
-| HTTP routing | `api/routes/routes.go`, `constants/commands.go` for legacy command paths |
-| HTTP handlers | `api/handlers/` |
-| Request/response DTOs and validation | `types/` |
-| Business services | `services/` |
-| Database access | `repositories/` |
-| GORM models | `models/` |
-| Chain configuration | `constants/chains.go`, `application/configuration/chains.go`, `blockchain/chains/` |
-| Asset/token configuration | `application/configuration/assets.go`, `asset/` |
-| Periodic/background work | `workers/`, `services/*`, `workers/supervisor` |
-| Merchant/admin/checkout UI | `views/`, `views/assets/` |
-| OpenAPI output | `docs/swagger.yaml`, `docs/swagger.json`, `docs/docs.go` |
+| HTTP 路由 | `api/routes/routes.go`；旧命令路径见 `constants/commands.go` |
+| HTTP 处理器 | `api/handlers/` |
+| 请求/响应 DTO 与校验 | `types/` |
+| 业务服务 | `services/` |
+| 数据库访问 | `repositories/` |
+| GORM 模型 | `models/` |
+| 链配置 | `constants/chains.go`、`application/configuration/chains.go`、`blockchain/chains/` |
+| 资产/代币配置 | `application/configuration/assets.go`、`asset/` |
+| 周期性/后台工作 | `workers/`、`services/*`、`workers/supervisor` |
+| 商户/管理/收银台界面 | `views/`、`views/assets/` |
+| OpenAPI 产物 | `docs/swagger.yaml`、`docs/swagger.json`、`docs/docs.go` |
 
-Money-path changes must preserve the ownership rules in `docs/module-boundaries.md`. Chain listeners record facts; they do not directly mutate payments, ledger balances, webhooks, or sweeps. Deposit, payment, ledger, outbound, webhook, and reconciliation changes should cross boundaries through services, repositories, worker commands, or money events.
+资金链路改动必须保持 `docs/module-boundaries.md` 中的归属规则。链监听器只记录事实；它们不直接修改支付、账本余额、Webhook 或归集。充值、支付、账本、出站、Webhook 与对账的改动应通过 services、repositories、worker 命令或资金事件跨越边界。
 
-## Common Changes
+<a id="common-changes"></a>
+## 常见改动
 
-### Add or Change a V1 API Endpoint
+<a id="add-or-change-a-v1-api-endpoint"></a>
+### 新增或修改 V1 API 端点
 
-1. Add or update DTOs and validation in `types/`.
-2. Implement handler behavior in `api/handlers/`.
-3. Register the route in `api/routes/routes.go`.
-4. Decide whether the endpoint is read-only API-key access or mutating HMAC-signed access.
-5. Add scope, IP allowlist, idempotency, and replay protection behavior when the endpoint creates money movement or durable operations.
-6. Update Swagger annotations and regenerate docs:
+1. 在 `types/` 中新增或更新 DTO 与校验。
+2. 在 `api/handlers/` 中实现处理器行为。
+3. 在 `api/routes/routes.go` 注册路由。
+4. 决定该端点是只读的 API key 访问，还是需要 HMAC 签名的变更类访问。
+5. 当端点会产生资金流转或持久化操作时，补上 scope、IP 允许列表、幂等与重放保护行为。
+6. 更新 Swagger 注解并重新生成文档：
 
 ```bash
 swag init -g main.go -o docs
 ```
 
-7. Update `docs/integration-guide.md` when partner-facing behavior changes.
-8. Add focused handler, auth, repository, and contract tests.
+7. 面向合作方的行为变化时，更新 `docs/integration-guide.md`。
+8. 增加针对处理器、鉴权、仓储与契约的测试。
 
-### Add or Change a Database Model
+<a id="add-or-change-a-database-model"></a>
+### 新增或修改数据库模型
 
-1. Add or update the GORM model under `models/`.
-2. Add repository methods under `repositories/`; keep query and transaction behavior out of handlers.
-3. Register the model in `services/database.autoMigrateModels`.
-4. Add schema verification coverage in `services/database.VerifySchema` helpers and tests.
-5. Add a versioned artifact in `services/dbmigrations/migrations.go` with summary, forward plan, lock impact, backfill, rollback, verification query, and verification command.
-6. Update `docs/production-migration-discipline.md` when the artifact list changes.
-7. Add repository tests for idempotency, locking, conflicts, and lifecycle transitions.
+1. 在 `models/` 下新增或更新 GORM 模型。
+2. 在 `repositories/` 下增加仓储方法；不要把查询与事务行为放进处理器。
+3. 在 `services/database.autoMigrateModels` 注册模型。
+4. 在 `services/database.VerifySchema` 辅助函数与测试中补充 schema 校验覆盖。
+5. 在 `services/dbmigrations/migrations.go` 新增版本化工件，包含摘要、前向方案、锁影响、回填、回滚、校验查询与校验命令。
+6. 工件列表变化时更新 `docs/production-migration-discipline.md`。
+7. 为幂等、加锁、冲突与生命周期状态转换增加仓储测试。
 
-Production schema changes are not startup-only `AutoMigrate` changes. Keep production rollout, backfill, verification, and rollback evidence explicit.
+生产 schema 变更不是仅靠启动时 `AutoMigrate` 的改动。生产上线、回填、校验与回滚证据必须明确保留。
 
-### Add a Worker
+<a id="add-a-worker"></a>
+### 新增 worker
 
-1. Put pure work in a service with a `RunOnce`-style method when possible.
-2. Make loops accept `context.Context` and stop promptly on cancellation.
-3. Register lifecycle ownership with `workers/supervisor`.
-4. Use `WorkerLeaseRepo` when only one process should own the job.
-5. Persist progress before acknowledging external or cross-module work.
-6. Add tests for cancellation, retry, idempotency, lock expiry, and partial failure recovery.
+1. 尽可能把纯逻辑放进带 `RunOnce` 风格方法的 service。
+2. 让循环接受 `context.Context`，并在取消时及时停止。
+3. 用 `workers/supervisor` 注册生命周期归属。
+4. 当只允许一个进程拥有该任务时，使用 `WorkerLeaseRepo`。
+5. 在确认外部或跨模块工作之前先持久化进度。
+6. 为取消、重试、幂等、锁过期与部分失败恢复增加测试。
 
-### Add a Chain
+<a id="add-a-chain"></a>
+### 新增链
 
-1. Add the chain ID, name, logo slug, and testnet classification in `constants/chains.go`.
-2. Implement the chain in `blockchain/chains/` and satisfy the shared chain interface.
-3. Register it in `application/configuration/chains.go`, including aliases.
-4. Add RPC env handling and listener start-block policy support when the chain has a listener.
-5. Add native asset and token deployments in `application/configuration/assets.go`.
-6. Add route/API/readiness/test coverage for chain discovery and address validation.
-7. Add static chain/coin assets when the UI needs logos.
+1. 在 `constants/chains.go` 增加链 ID、名称、logo slug 与测试网分类。
+2. 在 `blockchain/chains/` 实现该链，并满足共享链接口。
+3. 在 `application/configuration/chains.go` 注册它，包含别名。
+4. 当该链有监听器时，补充 RPC env 处理与监听器起始区块策略支持。
+5. 在 `application/configuration/assets.go` 增加原生资产与代币部署。
+6. 为链发现与地址校验补充路由/API/就绪/测试覆盖。
+7. 当 UI 需要 logo 时，增加静态链/币资产。
 
-### Add an Asset or Token Deployment
+<a id="add-an-asset-or-token-deployment"></a>
+### 新增资产或代币部署
 
-1. Add or update the `asset.AssetDefinition` in `application/configuration/assets.go`.
-2. Use the correct chain ID, contract address or mint, decimals, native flag, symbol, and enabled flag.
-3. Add aliases only when the project intentionally treats wrapped or alternate symbols as a canonical asset.
-4. Add price fallback env support when CoinGecko does not cover the symbol.
-5. Add or update asset registry tests when the deployment affects grouping, selection, logos, or API output.
+1. 在 `application/configuration/assets.go` 新增或更新 `asset.AssetDefinition`。
+2. 使用正确的链 ID、合约地址或 mint、精度、原生标记、符号与启用标记。
+3. 仅当项目有意把包装或替代符号视为规范资产时，才添加别名。
+4. 当 CoinGecko 不覆盖该符号时，补充价格回退 env 支持。
+5. 当部署影响分组、选择、logo 或 API 输出时，新增或更新资产注册表测试。
 
-### Change Webhooks or Money Events
+<a id="change-webhooks-or-money-events"></a>
+### 修改 Webhook 或资金事件
 
-1. Update the catalog in `services/webhook/event_catalog.go`.
-2. Update `docs/money-event-catalog.md`.
-3. Preserve event ID stability and idempotency.
-4. Keep webhook delivery at-least-once and retry-safe.
-5. Add contract tests for event shape, ordering, replay, and diagnostic behavior.
+1. 更新 `services/webhook/event_catalog.go` 中的目录。
+2. 更新 `docs/money-event-catalog.md`。
+3. 保持事件 ID 稳定与幂等。
+4. 保持 Webhook 投递为至少一次且重试安全。
+5. 为事件形状、顺序、重放与诊断行为增加契约测试。
 
-### Change Merchant/Admin/Checkout Views
+<a id="change-merchantadmincheckout-views"></a>
+### 修改商户/管理/收银台视图
 
-1. Edit templates in `views/`.
-2. Edit CSS/JS in `views/assets/`.
-3. Run `npm run build:css` when Tailwind input changes.
-4. Regenerate the compressed sidecar of every asset you changed: `go run ./scripts/brotli-sidecars <asset files...>` (or `go run ./scripts/brotli-sidecars --verify` to audit all of them). `TestFiberBrotliSidecarsMatchSources` fails if a sidecar does not decompress to its source.
-5. Add or update view rendering tests in `views_test.go` or handler tests.
-6. Verify checkout and portal routes in development mode so HTML reload and no-cache static assets are exercised.
+1. 编辑 `views/` 中的模板。
+2. 编辑 `views/assets/` 中的 CSS/JS。
+3. Tailwind 输入变化时运行 `npm run build:css`。
+4. 为你改动过的每个资源重新生成压缩 sidecar：`go run ./scripts/brotli-sidecars <asset files...>`（或用 `go run ./scripts/brotli-sidecars --verify` 审查全部）。若某个 sidecar 解压后与源文件不一致，`TestFiberBrotliSidecarsMatchSources` 会失败。
+5. 在 `views_test.go` 或处理器测试中新增或更新视图渲染测试。
+6. 在开发模式下验证收银台与门户路由，以覆盖 HTML 重载与禁用缓存的静态资源。
 
-### Localization (zh-CN / en)
+<a id="localization-zh-cn--en"></a>
+### 本地化（zh-CN / en）
 
-Every user-visible surface — the public home page, the merchant portal, the admin panel, the
-hosted buyer flow (payment link, checkout, pay page, payment result) and the invoice — renders
-copy through the in-repo `localization` package. There is exactly one mechanism:
+所有面向用户的界面——公开首页、商户门户、管理面板、托管买家流程（支付链接、收银台、支付页、支付结果）与发票——都通过仓库内 `localization` 包渲染文案。机制只有一套：
 
-- **Locales**: `zh-CN` (default) and `en`. English is the catalog key, so `localization.T` falls
-  back to the source text for a missing entry and the zh-CN catalog (`localization/catalog_zh*.go`)
-  holds the translations. The retired checkout locale `tr` is not a supported value anywhere.
-- **Resolution**: recognized `?lang=` query → `gateway_portal_lang` cookie → the legacy
-  `gateway_lang` cookie (read-only, recognized values only) → `zh-CN`. `Accept-Language` is never
-  consulted, so a default is deterministic. The payment-link landing page additionally treats the
-  merchant's stored link language as the journey default (`localization.BuyerLocaleForProduct`).
-- **Recording a choice**: `api/middleware/portal_locale.go` owns every user-visible path. A GET/HEAD
-  request with a recognized `lang` value writes `gateway_portal_lang`, strips the parameter and
-  redirects on the same path. Internally generated URLs carry no `lang`, so a switch never leaves a
-  stale parameter behind.
-- **Browser copy**: the server renders the per-request JSON bundle
-  (`<script type="application/json" id="portal-i18n-data">`) and `views/assets/portal-i18n.js`
-  exposes it as `portalT(key)`; `views/assets/checkout.js` degrades to the English key when that
-  runtime is missing. Client code must never derive copy from `document.documentElement.lang` or
-  `navigator.language`.
-- **Rules for new copy**: add a `{{ t .Locale "English source text" }}` call (or `portalT("…")` in a
-  browser asset) and add the zh-CN entry to the matching catalog file. Do not hard-code Han text
-  outside the catalog: `TestCatalogCoversEveryRequestedKey` and the CJK rule test fail otherwise.
+- **区域**：`zh-CN`（默认）与 `en`。英文是目录键，因此 `localization.T` 在缺少条目时会回退到源文本，而 zh-CN 目录（`localization/catalog_zh*.go`）保存译文。已退役的收银台区域 `tr` 在任何地方都不是受支持取值。
+- **解析顺序**：可识别的 `?lang=` 查询参数 → `gateway_portal_lang` cookie → 旧版 `gateway_lang` cookie（只读，仅识别已知取值）→ `zh-CN`。永不参考 `Accept-Language`，因此默认值是可确定的。支付链接落地页还会把商户存储的链接语言作为该旅程的默认值（`localization.BuyerLocaleForProduct`）。
+- **记录选择**：`api/middleware/portal_locale.go` 拥有所有用户可见路径。带可识别 `lang` 取值的 GET/HEAD 请求会写入 `gateway_portal_lang`，剥掉该参数并在同一路径重定向。内部生成的 URL 不携带 `lang`，因此切换语言不会留下陈旧参数。
+- **浏览器文案**：服务端渲染每请求 JSON bundle（`<script type="application/json" id="portal-i18n-data">`），`views/assets/portal-i18n.js` 将其暴露为 `portalT(key)`；当该运行时缺失时 `views/assets/checkout.js` 降级为英文键。客户端代码绝不能从 `document.documentElement.lang` 或 `navigator.language` 推导文案。
+- **新文案规则**：新增 `{{ t .Locale "English source text" }}` 调用（浏览器资源中用 `portalT("…")`），并把 zh-CN 条目加到对应目录文件。不要把汉字硬编码在目录之外：否则 `TestCatalogCoversEveryRequestedKey` 与 CJK 规则测试会失败。
 
-When you change templates, assets or catalogs, also update the compressed sidecars of changed
-assets and re-run the localization tests:
+修改模板、资源或目录时，还需重新生成被改动资源的压缩 sidecar，并重跑本地化测试：
 
 ```bash
 go test -count=1 ./localization ./api/handlers
 ```
 
-## Testing
+<a id="testing"></a>
+## 测试
 
-Run focused tests while developing:
+开发时运行聚焦测试：
 
 ```bash
 go test ./services/deposits ./repositories -run TestName
 ```
 
-Run the full Go suite:
+运行完整 Go 套件：
 
 ```bash
 go test ./...
 ```
 
-Run fallback-mode regression when native Trust Wallet Core is not available or when you need the CI-style isolated wallet mode:
+当本地没有原生 Trust Wallet Core，或需要 CI 风格的隔离钱包模式时，运行 fallback 模式回归：
 
 ```bash
 GATEWAY_REGRESSION_MODE=fallback ./scripts/regression.sh
 ```
 
-Run native regression before changes that touch wallet generation, signing, address validation, chain implementations, or production-critical money movement:
+在触及钱包生成、签名、地址校验、链实现或生产关键资金流转的改动之前，运行原生回归：
 
 ```bash
 ./scripts/regression.sh
 ```
 
-Some repository and integration tests need PostgreSQL and skip unless a DSN is provided. Use a disposable database:
+部分仓储与集成测试需要 PostgreSQL，未提供 DSN 时会 skip。请使用一次性数据库：
 
 ```bash
 TEST_DATABASE_URL="host=127.0.0.1 port=5432 user=postgres password=postgres dbname=gateway_test sslmode=disable" go test ./repositories ./services/database ./workers/indexer ./services/txrescan
 ```
 
-Run Go vet through the regression script or directly:
+通过回归脚本或直接运行 Go vet：
 
 ```bash
 go vet ./...
 ```
 
-## Safety Rules
+<a id="safety-rules"></a>
+## 安全规则
 
-- Do not run the server with `-tags walletcorefallback`; `main.go` rejects fallback server runs unless explicitly overridden for narrow debugging.
-- Do not use `SIGNER_MODE=software` for production custody. Production signing must remain behind an external signer mode such as KMS, HSM, MPC, or Vault.
-- Do not add money-path state changes directly in chain listeners.
-- Do not write cross-module table updates from handlers just because a repository is reachable.
-- Do not bypass idempotency for payment, payout, refund, sweep, webhook, or ledger work.
-- Do not weaken HMAC signing, timestamp checks, API scopes, IP allowlist behavior, or replay protection for mutating partner API routes.
-- Do not commit `.env`, private keys, mnemonics, API secrets, webhook secrets, production RPC credentials, or generated local database dumps.
+- 不要用 `-tags walletcorefallback` 运行服务器；除非为窄范围调试显式覆盖，否则 `main.go` 会拒绝 fallback 服务器运行。
+- 不要用 `SIGNER_MODE=software` 承担生产托管。生产签名必须留在外部签名模式（如 KMS、HSM、MPC 或 Vault）之后。
+- 不要在链监听器中直接添加资金链路状态变更。
+- 不要因为仓储可访问，就绕过模块边界在处理器中写跨模块表更新。
+- 不要为支付、出账、退款、归集、Webhook 或账本工作绕过幂等。
+- 不要为变更类合作方 API 路由削弱 HMAC 签名、时间戳校验、API scope、IP 允许列表行为或重放保护。
+- 不要提交 `.env`、私钥、助记词、API secret、Webhook secret、生产 RPC 凭据或生成的本地数据库导出。
 
-## Pull Request Checklist
+<a id="pull-request-checklist"></a>
+## Pull Request 检查清单
 
-- Relevant docs are updated: README, integration guide, money event catalog, runbook, or migration discipline as needed.
-- New persisted state is registered in model, migration artifact, schema verification, and repository tests.
-- New partner behavior has API contract and Swagger updates.
-- New worker behavior is cancellable, idempotent, observable, and supervisor-owned.
-- Money-path changes respect module ownership boundaries.
-- CSS changes have rebuilt `views/assets/tailwind.css` and regenerated the compressed `.fiber.br` sidecars of the changed assets.
-- Tests include the narrow package suite plus broader regression where the change has cross-module impact.
+- 相关文档已更新：视需要更新 README、集成指南、资金事件目录、runbook 或迁移纪律文档。
+- 新的持久化状态已在模型、迁移工件、schema 校验与仓储测试中登记。
+- 新的合作方行为已更新 API 契约与 Swagger。
+- 新的 worker 行为可取消、幂等、可观测，并由 supervisor 托管。
+- 资金链路改动遵守模块归属边界。
+- CSS 改动已重建 `views/assets/tailwind.css`，并重新生成被改动资源的压缩 `.fiber.br` sidecar。
+- 测试覆盖了窄范围包测试，且在改动有跨模块影响时补充了更广的回归。

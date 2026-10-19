@@ -1,32 +1,20 @@
-# Baseline isolation stack (A3, local non-production)
+# Baseline 隔离验证栈（A3，本地非生产）
 
-One page. This stack proves a reproducible native build, a dedicated PostgreSQL
-test database, and an offline application smoke — without touching the existing
-`deploy/compose/offline/` stack, the repository root `.env`, or any user volume.
+一页说明。本栈用于证明可复现的原生构建、专用 PostgreSQL 测试库，以及离线应用冒烟验证，并且不会触碰既有的 `deploy/compose/offline/` 栈、仓库根目录 `.env` 或任何用户数据卷。
 
-## What it is
+<a id="what-it-is"></a>
+## 它是什么
 
-* `postgres:16-alpine` with a private `gateway_test` database. It has **no
-  `env_file`**: only its three PG_* fields arrive, via explicit `--env-file`
-  interpolation of the calling shell, so the database container never receives
-  the wider synthetic app secrets (mnemonic, admin password, portal JWT).
-* `gateway`: the current-source **native** runtime image, `GATEWAY_OFFLINE=true`,
-  attached only to an internal network. No ports published.
-* `test` (profile `test`): the current-source **native** test image, running
-  `scripts/baseline/run-tests.sh` inside the same internal network with
-  `GOPROXY=off` and `GOTOOLCHAIN=local`. Its four DSN variables come from the
-  controlled `P0_DSN_FILE` and are never inherited from the host.
+* `postgres:16-alpine`，带一个私有的 `gateway_test` 数据库。它**没有 `env_file`**：只有三个 PG_* 字段通过调用方 shell 的显式 `--env-file` 插值传入，因此数据库容器永远不会拿到更广范围的合成应用密钥（助记词、管理员密码、门户 JWT）。
+* `gateway`：当前源码的**原生**运行时镜像，`GATEWAY_OFFLINE=true`，只接入内部网络，不发布任何端口。
+* `test`（profile `test`）：当前源码的**原生**测试镜像，在同一内部网络内运行 `scripts/baseline/run-tests.sh`，并使用 `GOPROXY=off` 与 `GOTOOLCHAIN=local`。它的四个 DSN 变量来自受控的 `P0_DSN_FILE`，绝不会从宿主机继承。
 
-Isolation guarantees: no top-level `name:`, no explicit `name:` on the volume or
-network (the `-p` project prefix namespaces everything), no reference to any
-existing volume, and no fallback to the repository root `.env`.
+隔离保证：没有顶层 `name:`，数据卷和网络也没有显式 `name:`（由 `-p` 项目前缀命名所有对象），不引用任何既有数据卷，也不回退到仓库根目录 `.env`。
 
-**Calling contract (not verified by Compose):** `P0_ENV_FILE` / `P0_DSN_FILE` /
-`P0_EVIDENCE_DIR` must be absolute paths. Compose only performs interpolation; it
-does not check absoluteness. Pass them from a shell that never sources the
-repository root `.env`.
+**调用约定（Compose 不做校验）：** `P0_ENV_FILE` / `P0_DSN_FILE` / `P0_EVIDENCE_DIR` 必须是绝对路径。Compose 只做插值，不检查是否为绝对路径。请在从不 source 仓库根 `.env` 的 shell 中传入它们。
 
-## Prepare (synthetic credentials only)
+<a id="prepare-synthetic-credentials-only"></a>
+## 准备（仅合成凭据）
 
 ```sh
 umask 077
@@ -36,7 +24,8 @@ scripts/generate-offline-env.sh --path "$RUN/env/gateway.env"          # 0600, n
 python3 scripts/baseline/make-dsn-env.py --env "$RUN/env/gateway.env" --out "$RUN/env/dsn.env"
 ```
 
-## Build (network allowed for dependencies; native CGO, never fallback)
+<a id="build-network-allowed-for-dependencies-native-cgo-never-fallback"></a>
+## 构建（依赖允许联网；原生 CGO，绝不使用 fallback）
 
 ```sh
 TAG=a3-$(date +%s)
@@ -44,7 +33,8 @@ docker build --build-arg BUILD_JOBS=4 --target gotest  -t "gateway-baseline:${TA
 docker build                           --target runtime -t "gateway-baseline:${TAG}-runtime" .
 ```
 
-## Run the suite (one full pass; evidence lands in $RUN/evidence)
+<a id="run-the-suite-one-full-pass-evidence-lands-in-runevidence"></a>
+## 运行测试套件（一次完整执行；证据落在 $RUN/evidence）
 
 ```sh
 export P0_ENV_FILE="$RUN/env/gateway.env" P0_DSN_FILE="$RUN/env/dsn.env" \
@@ -62,21 +52,14 @@ python3 scripts/baseline/verify-test-json.py \
   --summary "$RUN/evidence/summary.json"
 ```
 
-Exit semantics:
+退出码语义：
 
-* `run-tests.sh`: `0` all green; otherwise the first non-zero of build, vet, test;
-  `70` only for missing synthetic DSN variables (environment error); `64` bad
-  invocation. Database connection failures are **not** remapped — they surface as
-  ordinary test/vet exit codes.
-* `verify-test-json.py`: `0` pass, `2` gate violation, `3` evidence error
-  (unparsable/non-object JSON, empty stream, empty must-run). The gate also
-  rejects tests that reach no terminal event (truncated stream), must-run tests
-  without a `run` or without a terminal `pass`, and must-run packages without a
-  package-level completion `pass`.
-* The single tolerated skip is `core/repositories Test_Merchant`
-  (`scripts/baseline/allow-skip.txt`); it is reported, never counted as passed.
+* `run-tests.sh`：`0` 表示全绿；否则返回 build、vet、test 中第一个非零退出码；`70` 仅用于缺失合成 DSN 变量（环境错误）；`64` 表示调用方式错误。数据库连接失败**不会**被重映射——它们会以普通的 test/vet 退出码呈现。
+* `verify-test-json.py`：`0` 通过，`2` 门禁违规，`3` 证据错误（JSON 不可解析/非对象、事件流为空、must-run 列表为空）。门禁还会拒绝未到达终态事件（事件流被截断）的测试、缺少 `run` 事件或未以 `pass` 终态的 must-run 测试，以及没有包级完成 `pass` 的 must-run 包。
+* 唯一被容忍的 skip 是 `core/repositories Test_Merchant`（见 `scripts/baseline/allow-skip.txt`）；它会被报告，但从不计为通过。
 
-## Smoke (offline app; no secrets in output)
+<a id="smoke-offline-app-no-secrets-in-output"></a>
+## 冒烟（离线应用；输出中不含密钥）
 
 ```sh
 compose up -d gateway --wait
@@ -91,45 +74,31 @@ docker exec "${PROJ}-gateway-1" sh -c 'curl --max-time 3 -fsS http://93.184.216.
 docker inspect "${PROJ}-gateway-1" --format '{{json .NetworkSettings.Networks}}'
 ```
 
-## CI (Regression workflow)
+<a id="ci-regression-workflow"></a>
+## CI（Regression 工作流）
 
-`.github/workflows/regression.yml` runs this baseline as the **required**
-conclusion: the `gotest` image is built from the current checkout
-(`BUILD_JOBS=2`), a dedicated `postgres:16-alpine` starts on the internal
-network, `scripts/baseline/run-tests.sh` records the raw build/vet/test exit
-codes, and `scripts/baseline/verify-test-json.py` is the only step deciding
-pass/fail. The gate runs with `if: always()` (so evidence survives failures) and
-the same applies to the artifact upload and the cleanup step, which stops only
-that job's own compose project. Before the heavy native build, a
-`docker compose … config --quiet` preflight verifies that every variable the
-baseline compose file requires is present (it prints nothing, so no resolved
-secrets can reach the log). Uploaded artifacts are an **explicit file
-whitelist** — `go-version.txt`, `build.txt`, `build.stderr`, `vet.txt`,
-`vet.stderr`, `test.jsonl`, `test.stderr`, the three exit-code files and
-`summary.json` — with no recursive wildcard over the run directory, so env files
-and credentials can never be uploaded. `fallback-regression` is supplementary
-and cannot mask a native failure.
+`.github/workflows/regression.yml` 把本 baseline 作为**必需**结论来运行：`gotest` 镜像从当前检出构建（`BUILD_JOBS=2`），专用 `postgres:16-alpine` 在内部网络启动，`scripts/baseline/run-tests.sh` 记录 build/vet/test 的原始退出码，只有 `scripts/baseline/verify-test-json.py` 决定通过/失败。门禁以 `if: always()` 运行（失败时证据仍保留），产物上传与清理步骤同样如此，清理只停止该 job 自己的 compose 项目。在耗时的原生构建之前，`docker compose … config --quiet` 预检会验证 baseline compose 文件所需的每个变量都已存在（它不打印内容，因此不会有解析后的密钥进入日志）。上传产物使用**显式文件白名单**——`go-version.txt`、`build.txt`、`build.stderr`、`vet.txt`、`vet.stderr`、`test.jsonl`、`test.stderr`、三个退出码文件与 `summary.json`——不对运行目录做递归通配，因此 env 文件与凭据永远不会被上传。`fallback-regression` 是补充项，不能掩盖原生失败。
 
-The wiring is pinned by `scripts/baseline/ci_workflow_contract_test.go`, which
-runs as part of the ordinary Go suite.
+该接线由 `scripts/baseline/ci_workflow_contract_test.go` 固化，它作为常规 Go 测试套件的一部分运行。
 
-## Local checks for the baseline tooling itself
+<a id="local-checks-for-the-baseline-tooling-itself"></a>
+## baseline 工具自身的本地检查
 
 ```sh
 python3 scripts/baseline/test_verify_test_json.py     # gate unit tests
 sh scripts/baseline/test_run_tests.sh                 # runner stub tests
 ```
 
-## Stop
+<a id="stop"></a>
+## 停止
 
 ```sh
 compose stop    # keeps this project's own volume and containers
 ```
 
-Never `down -v`, `volume rm`, or deletions of pre-existing images/containers
-without a separate, explicit resource-destruction authorization.
+在没有单独的、明确的资源销毁授权时，绝不使用 `down -v`、`volume rm`，也不要删除已存在的镜像/容器。
 
-## Non-goals
+<a id="non-goals"></a>
+## 非目标
 
-No business-logic, schema, HD-path, brand, or licensing changes; no CI changes in
-this milestone; no production use — this is a tested local baseline only.
+不做业务逻辑、schema、HD 路径、品牌或许可变更；本里程碑不改 CI；不用于生产——这只是一个经过测试的本地 baseline。
