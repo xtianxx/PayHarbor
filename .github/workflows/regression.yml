@@ -7,6 +7,14 @@ on:
       - main
   workflow_dispatch:
 
+# A newer run for the same ref replaces the queued/running one: only the latest
+# commit needs the full native gate. The group is keyed by workflow and ref, so
+# other branches, pull requests and workflows keep independent groups (run IDs
+# or SHAs in the group would make every run unique and disable supersession).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # Required conclusion: native Trust Wallet Core build and the full Go suite on
   # a dedicated PostgreSQL, executed entirely inside the baseline container
@@ -66,10 +74,34 @@ jobs:
           docker compose -p "$PROJ" --env-file "$P0_ENV_FILE" \
             -f deploy/compose/baseline/docker-compose.yml config --quiet
 
+      # The official Buildx action supplies the persistent BuildKit cache below;
+      # it runs after the interpolation preflight and before the heavy build.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      # Builds the gotest stage from this checkout only (path context, not the
+      # default git context) and loads the result into the job's Docker daemon,
+      # so the compose stack runs exactly the image built here. Nothing is
+      # pushed to a registry. The GHA cache is read on every event; the shared
+      # scope is written only by trusted main runs (push or workflow_dispatch),
+      # so pull requests and forks can never poison it.
       - name: Build native test image from current checkout
-        run: |
-          set -euo pipefail
-          docker build --build-arg BUILD_JOBS="$BUILD_JOBS" --target gotest -t "$P0_TEST_IMAGE" .
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        env:
+          # The action uploads a build record by default; disable it so the
+          # explicit evidence whitelist stays the only artifact producer.
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+        with:
+          context: .
+          file: ./Dockerfile
+          target: gotest
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.P0_TEST_IMAGE }}
+          build-args: BUILD_JOBS=${{ env.BUILD_JOBS }}
+          cache-from: type=gha,scope=payharbor-native-linux-amd64-v1
+          cache-to: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'type=gha,mode=max,scope=payharbor-native-linux-amd64-v1' || '' }}
 
       - name: Start dedicated PostgreSQL (internal network only)
         run: |
