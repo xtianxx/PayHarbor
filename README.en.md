@@ -68,6 +68,21 @@ PayHarbor is designed for merchant, wallet, and exchange-style teams that need c
 - Prometheus-compatible `/metrics`, request observability, and readiness endpoints
 - Swagger/OpenAPI output and integration documentation
 
+## Interface Preview
+
+These screenshots show the Chinese-language UI in a local, isolated demo environment. Merchants, orders, and amounts are synthetic and do not represent real transactions or a production deployment.
+
+![Merchant overview (demo data)](docs/screenshots/merchant-dashboard.png)
+
+<details>
+<summary>View payment activity and hosted checkout</summary>
+
+![Payment activity (demo data)](docs/screenshots/merchant-payments.png)
+
+![Hosted checkout (demo session)](docs/screenshots/hosted-checkout.png)
+
+</details>
+
 ## Supported Networks and Assets
 
 Chain records live in `application/configuration/chains.go`. Asset records live in `application/configuration/assets.go`.

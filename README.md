@@ -38,6 +38,21 @@ PayHarbor 是一个用 Go 编写的多链加密货币支付网关与钱包基础
 - **对账与运维**：资金不变量检查、储备余额检查、卡住生命周期案件、归集运维台账与操作员后台。
 - **商户/管理后台**：服务端渲染的商户门户与管理门户，支持中英文界面。
 
+## 界面预览
+
+以下截图为本地隔离环境中的中文演示界面。商户、订单与金额均为合成数据，不代表真实交易或生产部署。
+
+![商户总览（演示数据）](docs/screenshots/merchant-dashboard.png)
+
+<details>
+<summary>查看支付活动与托管收银台截图</summary>
+
+![支付活动（演示数据）](docs/screenshots/merchant-payments.png)
+
+![托管收银台（演示会话）](docs/screenshots/hosted-checkout.png)
+
+</details>
+
 ## 支持网络与资产
 
 支持网络：
